@@ -1,985 +1,4 @@
 var Elm = Elm || { Native: {} };
-Elm.Native.Array = {};
-Elm.Native.Array.make = function(localRuntime) {
-
-	localRuntime.Native = localRuntime.Native || {};
-	localRuntime.Native.Array = localRuntime.Native.Array || {};
-	if (localRuntime.Native.Array.values)
-	{
-		return localRuntime.Native.Array.values;
-	}
-	if ('values' in Elm.Native.Array)
-	{
-		return localRuntime.Native.Array.values = Elm.Native.Array.values;
-	}
-
-	var List = Elm.Native.List.make(localRuntime);
-
-	// A RRB-Tree has two distinct data types.
-	// Leaf -> "height"  is always 0
-	//         "table"   is an array of elements
-	// Node -> "height"  is always greater than 0
-	//         "table"   is an array of child nodes
-	//         "lengths" is an array of accumulated lengths of the child nodes
-
-	// M is the maximal table size. 32 seems fast. E is the allowed increase
-	// of search steps when concatting to find an index. Lower values will
-	// decrease balancing, but will increase search steps.
-	var M = 32;
-	var E = 2;
-
-	// An empty array.
-	var empty = {
-		ctor: '_Array',
-		height: 0,
-		table: []
-	};
-
-
-	function get(i, array)
-	{
-		if (i < 0 || i >= length(array))
-		{
-			throw new Error(
-				'Index ' + i + ' is out of range. Check the length of ' +
-				'your array first or use getMaybe or getWithDefault.');
-		}
-		return unsafeGet(i, array);
-	}
-
-
-	function unsafeGet(i, array)
-	{
-		for (var x = array.height; x > 0; x--)
-		{
-			var slot = i >> (x * 5);
-			while (array.lengths[slot] <= i)
-			{
-				slot++;
-			}
-			if (slot > 0)
-			{
-				i -= array.lengths[slot - 1];
-			}
-			array = array.table[slot];
-		}
-		return array.table[i];
-	}
-
-
-	// Sets the value at the index i. Only the nodes leading to i will get
-	// copied and updated.
-	function set(i, item, array)
-	{
-		if (i < 0 || length(array) <= i)
-		{
-			return array;
-		}
-		return unsafeSet(i, item, array);
-	}
-
-
-	function unsafeSet(i, item, array)
-	{
-		array = nodeCopy(array);
-
-		if (array.height === 0)
-		{
-			array.table[i] = item;
-		}
-		else
-		{
-			var slot = getSlot(i, array);
-			if (slot > 0)
-			{
-				i -= array.lengths[slot - 1];
-			}
-			array.table[slot] = unsafeSet(i, item, array.table[slot]);
-		}
-		return array;
-	}
-
-
-	function initialize(len, f)
-	{
-		if (len <= 0)
-		{
-			return empty;
-		}
-		var h = Math.floor( Math.log(len) / Math.log(M) );
-		return initialize_(f, h, 0, len);
-	}
-
-	function initialize_(f, h, from, to)
-	{
-		if (h === 0)
-		{
-			var table = new Array((to - from) % (M + 1));
-			for (var i = 0; i < table.length; i++)
-			{
-			  table[i] = f(from + i);
-			}
-			return {
-				ctor: '_Array',
-				height: 0,
-				table: table
-			};
-		}
-
-		var step = Math.pow(M, h);
-		var table = new Array(Math.ceil((to - from) / step));
-		var lengths = new Array(table.length);
-		for (var i = 0; i < table.length; i++)
-		{
-			table[i] = initialize_(f, h - 1, from + (i * step), Math.min(from + ((i + 1) * step), to));
-			lengths[i] = length(table[i]) + (i > 0 ? lengths[i-1] : 0);
-		}
-		return {
-			ctor: '_Array',
-			height: h,
-			table: table,
-			lengths: lengths
-		};
-	}
-
-	function fromList(list)
-	{
-		if (list === List.Nil)
-		{
-			return empty;
-		}
-
-		// Allocate M sized blocks (table) and write list elements to it.
-		var table = new Array(M);
-		var nodes = [];
-		var i = 0;
-
-		while (list.ctor !== '[]')
-		{
-			table[i] = list._0;
-			list = list._1;
-			i++;
-
-			// table is full, so we can push a leaf containing it into the
-			// next node.
-			if (i === M)
-			{
-				var leaf = {
-					ctor: '_Array',
-					height: 0,
-					table: table
-				};
-				fromListPush(leaf, nodes);
-				table = new Array(M);
-				i = 0;
-			}
-		}
-
-		// Maybe there is something left on the table.
-		if (i > 0)
-		{
-			var leaf = {
-				ctor: '_Array',
-				height: 0,
-				table: table.splice(0, i)
-			};
-			fromListPush(leaf, nodes);
-		}
-
-		// Go through all of the nodes and eventually push them into higher nodes.
-		for (var h = 0; h < nodes.length - 1; h++)
-		{
-			if (nodes[h].table.length > 0)
-			{
-				fromListPush(nodes[h], nodes);
-			}
-		}
-
-		var head = nodes[nodes.length - 1];
-		if (head.height > 0 && head.table.length === 1)
-		{
-			return head.table[0];
-		}
-		else
-		{
-			return head;
-		}
-	}
-
-	// Push a node into a higher node as a child.
-	function fromListPush(toPush, nodes)
-	{
-		var h = toPush.height;
-
-		// Maybe the node on this height does not exist.
-		if (nodes.length === h)
-		{
-			var node = {
-				ctor: '_Array',
-				height: h + 1,
-				table: [],
-				lengths: []
-			};
-			nodes.push(node);
-		}
-
-		nodes[h].table.push(toPush);
-		var len = length(toPush);
-		if (nodes[h].lengths.length > 0)
-		{
-			len += nodes[h].lengths[nodes[h].lengths.length - 1];
-		}
-		nodes[h].lengths.push(len);
-
-		if (nodes[h].table.length === M)
-		{
-			fromListPush(nodes[h], nodes);
-			nodes[h] = {
-				ctor: '_Array',
-				height: h + 1,
-				table: [],
-				lengths: []
-			};
-		}
-	}
-
-	// Pushes an item via push_ to the bottom right of a tree.
-	function push(item, a)
-	{
-		var pushed = push_(item, a);
-		if (pushed !== null)
-		{
-			return pushed;
-		}
-
-		var newTree = create(item, a.height);
-		return siblise(a, newTree);
-	}
-
-	// Recursively tries to push an item to the bottom-right most
-	// tree possible. If there is no space left for the item,
-	// null will be returned.
-	function push_(item, a)
-	{
-		// Handle resursion stop at leaf level.
-		if (a.height === 0)
-		{
-			if (a.table.length < M)
-			{
-				var newA = {
-					ctor: '_Array',
-					height: 0,
-					table: a.table.slice()
-				};
-				newA.table.push(item);
-				return newA;
-			}
-			else
-			{
-			  return null;
-			}
-		}
-
-		// Recursively push
-		var pushed = push_(item, botRight(a));
-
-		// There was space in the bottom right tree, so the slot will
-		// be updated.
-		if (pushed !== null)
-		{
-			var newA = nodeCopy(a);
-			newA.table[newA.table.length - 1] = pushed;
-			newA.lengths[newA.lengths.length - 1]++;
-			return newA;
-		}
-
-		// When there was no space left, check if there is space left
-		// for a new slot with a tree which contains only the item
-		// at the bottom.
-		if (a.table.length < M)
-		{
-			var newSlot = create(item, a.height - 1);
-			var newA = nodeCopy(a);
-			newA.table.push(newSlot);
-			newA.lengths.push(newA.lengths[newA.lengths.length - 1] + length(newSlot));
-			return newA;
-		}
-		else
-		{
-			return null;
-		}
-	}
-
-	// Converts an array into a list of elements.
-	function toList(a)
-	{
-		return toList_(List.Nil, a);
-	}
-
-	function toList_(list, a)
-	{
-		for (var i = a.table.length - 1; i >= 0; i--)
-		{
-			list =
-				a.height === 0
-					? List.Cons(a.table[i], list)
-					: toList_(list, a.table[i]);
-		}
-		return list;
-	}
-
-	// Maps a function over the elements of an array.
-	function map(f, a)
-	{
-		var newA = {
-			ctor: '_Array',
-			height: a.height,
-			table: new Array(a.table.length)
-		};
-		if (a.height > 0)
-		{
-			newA.lengths = a.lengths;
-		}
-		for (var i = 0; i < a.table.length; i++)
-		{
-			newA.table[i] =
-				a.height === 0
-					? f(a.table[i])
-					: map(f, a.table[i]);
-		}
-		return newA;
-	}
-
-	// Maps a function over the elements with their index as first argument.
-	function indexedMap(f, a)
-	{
-		return indexedMap_(f, a, 0);
-	}
-
-	function indexedMap_(f, a, from)
-	{
-		var newA = {
-			ctor: '_Array',
-			height: a.height,
-			table: new Array(a.table.length)
-		};
-		if (a.height > 0)
-		{
-			newA.lengths = a.lengths;
-		}
-		for (var i = 0; i < a.table.length; i++)
-		{
-			newA.table[i] =
-				a.height === 0
-					? A2(f, from + i, a.table[i])
-					: indexedMap_(f, a.table[i], i == 0 ? from : from + a.lengths[i - 1]);
-		}
-		return newA;
-	}
-
-	function foldl(f, b, a)
-	{
-		if (a.height === 0)
-		{
-			for (var i = 0; i < a.table.length; i++)
-			{
-				b = A2(f, a.table[i], b);
-			}
-		}
-		else
-		{
-			for (var i = 0; i < a.table.length; i++)
-			{
-				b = foldl(f, b, a.table[i]);
-			}
-		}
-		return b;
-	}
-
-	function foldr(f, b, a)
-	{
-		if (a.height === 0)
-		{
-			for (var i = a.table.length; i--; )
-			{
-				b = A2(f, a.table[i], b);
-			}
-		}
-		else
-		{
-			for (var i = a.table.length; i--; )
-			{
-				b = foldr(f, b, a.table[i]);
-			}
-		}
-		return b;
-	}
-
-	// TODO: currently, it slices the right, then the left. This can be
-	// optimized.
-	function slice(from, to, a)
-	{
-		if (from < 0)
-		{
-			from += length(a);
-		}
-		if (to < 0)
-		{
-			to += length(a);
-		}
-		return sliceLeft(from, sliceRight(to, a));
-	}
-
-	function sliceRight(to, a)
-	{
-		if (to === length(a))
-		{
-			return a;
-		}
-
-		// Handle leaf level.
-		if (a.height === 0)
-		{
-			var newA = { ctor:'_Array', height:0 };
-			newA.table = a.table.slice(0, to);
-			return newA;
-		}
-
-		// Slice the right recursively.
-		var right = getSlot(to, a);
-		var sliced = sliceRight(to - (right > 0 ? a.lengths[right - 1] : 0), a.table[right]);
-
-		// Maybe the a node is not even needed, as sliced contains the whole slice.
-		if (right === 0)
-		{
-			return sliced;
-		}
-
-		// Create new node.
-		var newA = {
-			ctor: '_Array',
-			height: a.height,
-			table: a.table.slice(0, right),
-			lengths: a.lengths.slice(0, right)
-		};
-		if (sliced.table.length > 0)
-		{
-			newA.table[right] = sliced;
-			newA.lengths[right] = length(sliced) + (right > 0 ? newA.lengths[right - 1] : 0);
-		}
-		return newA;
-	}
-
-	function sliceLeft(from, a)
-	{
-		if (from === 0)
-		{
-			return a;
-		}
-
-		// Handle leaf level.
-		if (a.height === 0)
-		{
-			var newA = { ctor:'_Array', height:0 };
-			newA.table = a.table.slice(from, a.table.length + 1);
-			return newA;
-		}
-
-		// Slice the left recursively.
-		var left = getSlot(from, a);
-		var sliced = sliceLeft(from - (left > 0 ? a.lengths[left - 1] : 0), a.table[left]);
-
-		// Maybe the a node is not even needed, as sliced contains the whole slice.
-		if (left === a.table.length - 1)
-		{
-			return sliced;
-		}
-
-		// Create new node.
-		var newA = {
-			ctor: '_Array',
-			height: a.height,
-			table: a.table.slice(left, a.table.length + 1),
-			lengths: new Array(a.table.length - left)
-		};
-		newA.table[0] = sliced;
-		var len = 0;
-		for (var i = 0; i < newA.table.length; i++)
-		{
-			len += length(newA.table[i]);
-			newA.lengths[i] = len;
-		}
-
-		return newA;
-	}
-
-	// Appends two trees.
-	function append(a,b)
-	{
-		if (a.table.length === 0)
-		{
-			return b;
-		}
-		if (b.table.length === 0)
-		{
-			return a;
-		}
-
-		var c = append_(a, b);
-
-		// Check if both nodes can be crunshed together.
-		if (c[0].table.length + c[1].table.length <= M)
-		{
-			if (c[0].table.length === 0)
-			{
-				return c[1];
-			}
-			if (c[1].table.length === 0)
-			{
-				return c[0];
-			}
-
-			// Adjust .table and .lengths
-			c[0].table = c[0].table.concat(c[1].table);
-			if (c[0].height > 0)
-			{
-				var len = length(c[0]);
-				for (var i = 0; i < c[1].lengths.length; i++)
-				{
-					c[1].lengths[i] += len;
-				}
-				c[0].lengths = c[0].lengths.concat(c[1].lengths);
-			}
-
-			return c[0];
-		}
-
-		if (c[0].height > 0)
-		{
-			var toRemove = calcToRemove(a, b);
-			if (toRemove > E)
-			{
-				c = shuffle(c[0], c[1], toRemove);
-			}
-		}
-
-		return siblise(c[0], c[1]);
-	}
-
-	// Returns an array of two nodes; right and left. One node _may_ be empty.
-	function append_(a, b)
-	{
-		if (a.height === 0 && b.height === 0)
-		{
-			return [a, b];
-		}
-
-		if (a.height !== 1 || b.height !== 1)
-		{
-			if (a.height === b.height)
-			{
-				a = nodeCopy(a);
-				b = nodeCopy(b);
-				var appended = append_(botRight(a), botLeft(b));
-
-				insertRight(a, appended[1]);
-				insertLeft(b, appended[0]);
-			}
-			else if (a.height > b.height)
-			{
-				a = nodeCopy(a);
-				var appended = append_(botRight(a), b);
-
-				insertRight(a, appended[0]);
-				b = parentise(appended[1], appended[1].height + 1);
-			}
-			else
-			{
-				b = nodeCopy(b);
-				var appended = append_(a, botLeft(b));
-
-				var left = appended[0].table.length === 0 ? 0 : 1;
-				var right = left === 0 ? 1 : 0;
-				insertLeft(b, appended[left]);
-				a = parentise(appended[right], appended[right].height + 1);
-			}
-		}
-
-		// Check if balancing is needed and return based on that.
-		if (a.table.length === 0 || b.table.length === 0)
-		{
-			return [a, b];
-		}
-
-		var toRemove = calcToRemove(a, b);
-		if (toRemove <= E)
-		{
-			return [a, b];
-		}
-		return shuffle(a, b, toRemove);
-	}
-
-	// Helperfunctions for append_. Replaces a child node at the side of the parent.
-	function insertRight(parent, node)
-	{
-		var index = parent.table.length - 1;
-		parent.table[index] = node;
-		parent.lengths[index] = length(node);
-		parent.lengths[index] += index > 0 ? parent.lengths[index - 1] : 0;
-	}
-
-	function insertLeft(parent, node)
-	{
-		if (node.table.length > 0)
-		{
-			parent.table[0] = node;
-			parent.lengths[0] = length(node);
-
-			var len = length(parent.table[0]);
-			for (var i = 1; i < parent.lengths.length; i++)
-			{
-				len += length(parent.table[i]);
-				parent.lengths[i] = len;
-			}
-		}
-		else
-		{
-			parent.table.shift();
-			for (var i = 1; i < parent.lengths.length; i++)
-			{
-				parent.lengths[i] = parent.lengths[i] - parent.lengths[0];
-			}
-			parent.lengths.shift();
-		}
-	}
-
-	// Returns the extra search steps for E. Refer to the paper.
-	function calcToRemove(a, b)
-	{
-		var subLengths = 0;
-		for (var i = 0; i < a.table.length; i++)
-		{
-			subLengths += a.table[i].table.length;
-		}
-		for (var i = 0; i < b.table.length; i++)
-		{
-			subLengths += b.table[i].table.length;
-		}
-
-		var toRemove = a.table.length + b.table.length;
-		return toRemove - (Math.floor((subLengths - 1) / M) + 1);
-	}
-
-	// get2, set2 and saveSlot are helpers for accessing elements over two arrays.
-	function get2(a, b, index)
-	{
-		return index < a.length
-			? a[index]
-			: b[index - a.length];
-	}
-
-	function set2(a, b, index, value)
-	{
-		if (index < a.length)
-		{
-			a[index] = value;
-		}
-		else
-		{
-			b[index - a.length] = value;
-		}
-	}
-
-	function saveSlot(a, b, index, slot)
-	{
-		set2(a.table, b.table, index, slot);
-
-		var l = (index === 0 || index === a.lengths.length)
-			? 0
-			: get2(a.lengths, a.lengths, index - 1);
-
-		set2(a.lengths, b.lengths, index, l + length(slot));
-	}
-
-	// Creates a node or leaf with a given length at their arrays for perfomance.
-	// Is only used by shuffle.
-	function createNode(h, length)
-	{
-		if (length < 0)
-		{
-			length = 0;
-		}
-		var a = {
-			ctor: '_Array',
-			height: h,
-			table: new Array(length)
-		};
-		if (h > 0)
-		{
-			a.lengths = new Array(length);
-		}
-		return a;
-	}
-
-	// Returns an array of two balanced nodes.
-	function shuffle(a, b, toRemove)
-	{
-		var newA = createNode(a.height, Math.min(M, a.table.length + b.table.length - toRemove));
-		var newB = createNode(a.height, newA.table.length - (a.table.length + b.table.length - toRemove));
-
-		// Skip the slots with size M. More precise: copy the slot references
-		// to the new node
-		var read = 0;
-		while (get2(a.table, b.table, read).table.length % M === 0)
-		{
-			set2(newA.table, newB.table, read, get2(a.table, b.table, read));
-			set2(newA.lengths, newB.lengths, read, get2(a.lengths, b.lengths, read));
-			read++;
-		}
-
-		// Pulling items from left to right, caching in a slot before writing
-		// it into the new nodes.
-		var write = read;
-		var slot = new createNode(a.height - 1, 0);
-		var from = 0;
-
-		// If the current slot is still containing data, then there will be at
-		// least one more write, so we do not break this loop yet.
-		while (read - write - (slot.table.length > 0 ? 1 : 0) < toRemove)
-		{
-			// Find out the max possible items for copying.
-			var source = get2(a.table, b.table, read);
-			var to = Math.min(M - slot.table.length, source.table.length);
-
-			// Copy and adjust size table.
-			slot.table = slot.table.concat(source.table.slice(from, to));
-			if (slot.height > 0)
-			{
-				var len = slot.lengths.length;
-				for (var i = len; i < len + to - from; i++)
-				{
-					slot.lengths[i] = length(slot.table[i]);
-					slot.lengths[i] += (i > 0 ? slot.lengths[i - 1] : 0);
-				}
-			}
-
-			from += to;
-
-			// Only proceed to next slots[i] if the current one was
-			// fully copied.
-			if (source.table.length <= to)
-			{
-				read++; from = 0;
-			}
-
-			// Only create a new slot if the current one is filled up.
-			if (slot.table.length === M)
-			{
-				saveSlot(newA, newB, write, slot);
-				slot = createNode(a.height - 1, 0);
-				write++;
-			}
-		}
-
-		// Cleanup after the loop. Copy the last slot into the new nodes.
-		if (slot.table.length > 0)
-		{
-			saveSlot(newA, newB, write, slot);
-			write++;
-		}
-
-		// Shift the untouched slots to the left
-		while (read < a.table.length + b.table.length )
-		{
-			saveSlot(newA, newB, write, get2(a.table, b.table, read));
-			read++;
-			write++;
-		}
-
-		return [newA, newB];
-	}
-
-	// Navigation functions
-	function botRight(a)
-	{
-		return a.table[a.table.length - 1];
-	}
-	function botLeft(a)
-	{
-		return a.table[0];
-	}
-
-	// Copies a node for updating. Note that you should not use this if
-	// only updating only one of "table" or "lengths" for performance reasons.
-	function nodeCopy(a)
-	{
-		var newA = {
-			ctor: '_Array',
-			height: a.height,
-			table: a.table.slice()
-		};
-		if (a.height > 0)
-		{
-			newA.lengths = a.lengths.slice();
-		}
-		return newA;
-	}
-
-	// Returns how many items are in the tree.
-	function length(array)
-	{
-		if (array.height === 0)
-		{
-			return array.table.length;
-		}
-		else
-		{
-			return array.lengths[array.lengths.length - 1];
-		}
-	}
-
-	// Calculates in which slot of "table" the item probably is, then
-	// find the exact slot via forward searching in  "lengths". Returns the index.
-	function getSlot(i, a)
-	{
-		var slot = i >> (5 * a.height);
-		while (a.lengths[slot] <= i)
-		{
-			slot++;
-		}
-		return slot;
-	}
-
-	// Recursively creates a tree with a given height containing
-	// only the given item.
-	function create(item, h)
-	{
-		if (h === 0)
-		{
-			return {
-				ctor: '_Array',
-				height: 0,
-				table: [item]
-			};
-		}
-		return {
-			ctor: '_Array',
-			height: h,
-			table: [create(item, h - 1)],
-			lengths: [1]
-		};
-	}
-
-	// Recursively creates a tree that contains the given tree.
-	function parentise(tree, h)
-	{
-		if (h === tree.height)
-		{
-			return tree;
-		}
-
-		return {
-			ctor: '_Array',
-			height: h,
-			table: [parentise(tree, h - 1)],
-			lengths: [length(tree)]
-		};
-	}
-
-	// Emphasizes blood brotherhood beneath two trees.
-	function siblise(a, b)
-	{
-		return {
-			ctor: '_Array',
-			height: a.height + 1,
-			table: [a, b],
-			lengths: [length(a), length(a) + length(b)]
-		};
-	}
-
-	function toJSArray(a)
-	{
-		var jsArray = new Array(length(a));
-		toJSArray_(jsArray, 0, a);
-		return jsArray;
-	}
-
-	function toJSArray_(jsArray, i, a)
-	{
-		for (var t = 0; t < a.table.length; t++)
-		{
-			if (a.height === 0)
-			{
-				jsArray[i + t] = a.table[t];
-			}
-			else
-			{
-				var inc = t === 0 ? 0 : a.lengths[t - 1];
-				toJSArray_(jsArray, i + inc, a.table[t]);
-			}
-		}
-	}
-
-	function fromJSArray(jsArray)
-	{
-		if (jsArray.length === 0)
-		{
-			return empty;
-		}
-		var h = Math.floor(Math.log(jsArray.length) / Math.log(M));
-		return fromJSArray_(jsArray, h, 0, jsArray.length);
-	}
-
-	function fromJSArray_(jsArray, h, from, to)
-	{
-		if (h === 0)
-		{
-			return {
-				ctor: '_Array',
-				height: 0,
-				table: jsArray.slice(from, to)
-			};
-		}
-
-		var step = Math.pow(M, h);
-		var table = new Array(Math.ceil((to - from) / step));
-		var lengths = new Array(table.length);
-		for (var i = 0; i < table.length; i++)
-		{
-			table[i] = fromJSArray_(jsArray, h - 1, from + (i * step), Math.min(from + ((i + 1) * step), to));
-			lengths[i] = length(table[i]) + (i > 0 ? lengths[i - 1] : 0);
-		}
-		return {
-			ctor: '_Array',
-			height: h,
-			table: table,
-			lengths: lengths
-		};
-	}
-
-	Elm.Native.Array.values = {
-		empty: empty,
-		fromList: fromList,
-		toList: toList,
-		initialize: F2(initialize),
-		append: F2(append),
-		push: F2(push),
-		slice: F3(slice),
-		get: F2(get),
-		set: F3(set),
-		map: F2(map),
-		indexedMap: F2(indexedMap),
-		foldl: F3(foldl),
-		foldr: F3(foldr),
-		length: length,
-
-		toJSArray: toJSArray,
-		fromJSArray: fromJSArray
-	};
-
-	return localRuntime.Native.Array.values = Elm.Native.Array.values;
-};
-
 Elm.Native.Basics = {};
 Elm.Native.Basics.make = function(localRuntime) {
 	localRuntime.Native = localRuntime.Native || {};
@@ -2953,945 +1972,6 @@ Elm.List.make = function (_elm) {
                              ,sortBy: sortBy
                              ,sortWith: sortWith};
 };
-Elm.Array = Elm.Array || {};
-Elm.Array.make = function (_elm) {
-   "use strict";
-   _elm.Array = _elm.Array || {};
-   if (_elm.Array.values) return _elm.Array.values;
-   var _U = Elm.Native.Utils.make(_elm),
-   $Basics = Elm.Basics.make(_elm),
-   $List = Elm.List.make(_elm),
-   $Maybe = Elm.Maybe.make(_elm),
-   $Native$Array = Elm.Native.Array.make(_elm);
-   var _op = {};
-   var append = $Native$Array.append;
-   var length = $Native$Array.length;
-   var isEmpty = function (array) {    return _U.eq(length(array),0);};
-   var slice = $Native$Array.slice;
-   var set = $Native$Array.set;
-   var get = F2(function (i,array) {
-      return _U.cmp(0,i) < 1 && _U.cmp(i,$Native$Array.length(array)) < 0 ? $Maybe.Just(A2($Native$Array.get,i,array)) : $Maybe.Nothing;
-   });
-   var push = $Native$Array.push;
-   var empty = $Native$Array.empty;
-   var filter = F2(function (isOkay,arr) {
-      var update = F2(function (x,xs) {    return isOkay(x) ? A2($Native$Array.push,x,xs) : xs;});
-      return A3($Native$Array.foldl,update,$Native$Array.empty,arr);
-   });
-   var foldr = $Native$Array.foldr;
-   var foldl = $Native$Array.foldl;
-   var indexedMap = $Native$Array.indexedMap;
-   var map = $Native$Array.map;
-   var toIndexedList = function (array) {
-      return A3($List.map2,
-      F2(function (v0,v1) {    return {ctor: "_Tuple2",_0: v0,_1: v1};}),
-      _U.range(0,$Native$Array.length(array) - 1),
-      $Native$Array.toList(array));
-   };
-   var toList = $Native$Array.toList;
-   var fromList = $Native$Array.fromList;
-   var initialize = $Native$Array.initialize;
-   var repeat = F2(function (n,e) {    return A2(initialize,n,$Basics.always(e));});
-   var Array = {ctor: "Array"};
-   return _elm.Array.values = {_op: _op
-                              ,empty: empty
-                              ,repeat: repeat
-                              ,initialize: initialize
-                              ,fromList: fromList
-                              ,isEmpty: isEmpty
-                              ,length: length
-                              ,push: push
-                              ,append: append
-                              ,get: get
-                              ,set: set
-                              ,slice: slice
-                              ,toList: toList
-                              ,toIndexedList: toIndexedList
-                              ,map: map
-                              ,indexedMap: indexedMap
-                              ,filter: filter
-                              ,foldl: foldl
-                              ,foldr: foldr};
-};
-Elm.Native.Char = {};
-Elm.Native.Char.make = function(localRuntime) {
-	localRuntime.Native = localRuntime.Native || {};
-	localRuntime.Native.Char = localRuntime.Native.Char || {};
-	if (localRuntime.Native.Char.values)
-	{
-		return localRuntime.Native.Char.values;
-	}
-
-	var Utils = Elm.Native.Utils.make(localRuntime);
-
-	return localRuntime.Native.Char.values = {
-		fromCode: function(c) { return Utils.chr(String.fromCharCode(c)); },
-		toCode: function(c) { return c.charCodeAt(0); },
-		toUpper: function(c) { return Utils.chr(c.toUpperCase()); },
-		toLower: function(c) { return Utils.chr(c.toLowerCase()); },
-		toLocaleUpper: function(c) { return Utils.chr(c.toLocaleUpperCase()); },
-		toLocaleLower: function(c) { return Utils.chr(c.toLocaleLowerCase()); }
-	};
-};
-
-Elm.Char = Elm.Char || {};
-Elm.Char.make = function (_elm) {
-   "use strict";
-   _elm.Char = _elm.Char || {};
-   if (_elm.Char.values) return _elm.Char.values;
-   var _U = Elm.Native.Utils.make(_elm),$Basics = Elm.Basics.make(_elm),$Native$Char = Elm.Native.Char.make(_elm);
-   var _op = {};
-   var fromCode = $Native$Char.fromCode;
-   var toCode = $Native$Char.toCode;
-   var toLocaleLower = $Native$Char.toLocaleLower;
-   var toLocaleUpper = $Native$Char.toLocaleUpper;
-   var toLower = $Native$Char.toLower;
-   var toUpper = $Native$Char.toUpper;
-   var isBetween = F3(function (low,high,$char) {    var code = toCode($char);return _U.cmp(code,toCode(low)) > -1 && _U.cmp(code,toCode(high)) < 1;});
-   var isUpper = A2(isBetween,_U.chr("A"),_U.chr("Z"));
-   var isLower = A2(isBetween,_U.chr("a"),_U.chr("z"));
-   var isDigit = A2(isBetween,_U.chr("0"),_U.chr("9"));
-   var isOctDigit = A2(isBetween,_U.chr("0"),_U.chr("7"));
-   var isHexDigit = function ($char) {
-      return isDigit($char) || (A3(isBetween,_U.chr("a"),_U.chr("f"),$char) || A3(isBetween,_U.chr("A"),_U.chr("F"),$char));
-   };
-   return _elm.Char.values = {_op: _op
-                             ,isUpper: isUpper
-                             ,isLower: isLower
-                             ,isDigit: isDigit
-                             ,isOctDigit: isOctDigit
-                             ,isHexDigit: isHexDigit
-                             ,toUpper: toUpper
-                             ,toLower: toLower
-                             ,toLocaleUpper: toLocaleUpper
-                             ,toLocaleLower: toLocaleLower
-                             ,toCode: toCode
-                             ,fromCode: fromCode};
-};
-Elm.Native.Color = {};
-Elm.Native.Color.make = function(localRuntime) {
-	localRuntime.Native = localRuntime.Native || {};
-	localRuntime.Native.Color = localRuntime.Native.Color || {};
-	if (localRuntime.Native.Color.values)
-	{
-		return localRuntime.Native.Color.values;
-	}
-
-	function toCss(c)
-	{
-		var format = '';
-		var colors = '';
-		if (c.ctor === 'RGBA')
-		{
-			format = 'rgb';
-			colors = c._0 + ', ' + c._1 + ', ' + c._2;
-		}
-		else
-		{
-			format = 'hsl';
-			colors = (c._0 * 180 / Math.PI) + ', ' +
-					 (c._1 * 100) + '%, ' +
-					 (c._2 * 100) + '%';
-		}
-		if (c._3 === 1)
-		{
-			return format + '(' + colors + ')';
-		}
-		else
-		{
-			return format + 'a(' + colors + ', ' + c._3 + ')';
-		}
-	}
-
-	return localRuntime.Native.Color.values = {
-		toCss: toCss
-	};
-};
-
-Elm.Color = Elm.Color || {};
-Elm.Color.make = function (_elm) {
-   "use strict";
-   _elm.Color = _elm.Color || {};
-   if (_elm.Color.values) return _elm.Color.values;
-   var _U = Elm.Native.Utils.make(_elm),$Basics = Elm.Basics.make(_elm);
-   var _op = {};
-   var Radial = F5(function (a,b,c,d,e) {    return {ctor: "Radial",_0: a,_1: b,_2: c,_3: d,_4: e};});
-   var radial = Radial;
-   var Linear = F3(function (a,b,c) {    return {ctor: "Linear",_0: a,_1: b,_2: c};});
-   var linear = Linear;
-   var fmod = F2(function (f,n) {    var integer = $Basics.floor(f);return $Basics.toFloat(A2($Basics._op["%"],integer,n)) + f - $Basics.toFloat(integer);});
-   var rgbToHsl = F3(function (red,green,blue) {
-      var b = $Basics.toFloat(blue) / 255;
-      var g = $Basics.toFloat(green) / 255;
-      var r = $Basics.toFloat(red) / 255;
-      var cMax = A2($Basics.max,A2($Basics.max,r,g),b);
-      var cMin = A2($Basics.min,A2($Basics.min,r,g),b);
-      var c = cMax - cMin;
-      var lightness = (cMax + cMin) / 2;
-      var saturation = _U.eq(lightness,0) ? 0 : c / (1 - $Basics.abs(2 * lightness - 1));
-      var hue = $Basics.degrees(60) * (_U.eq(cMax,r) ? A2(fmod,(g - b) / c,6) : _U.eq(cMax,g) ? (b - r) / c + 2 : (r - g) / c + 4);
-      return {ctor: "_Tuple3",_0: hue,_1: saturation,_2: lightness};
-   });
-   var hslToRgb = F3(function (hue,saturation,lightness) {
-      var hue$ = hue / $Basics.degrees(60);
-      var chroma = (1 - $Basics.abs(2 * lightness - 1)) * saturation;
-      var x = chroma * (1 - $Basics.abs(A2(fmod,hue$,2) - 1));
-      var _p0 = _U.cmp(hue$,0) < 0 ? {ctor: "_Tuple3",_0: 0,_1: 0,_2: 0} : _U.cmp(hue$,1) < 0 ? {ctor: "_Tuple3",_0: chroma,_1: x,_2: 0} : _U.cmp(hue$,
-      2) < 0 ? {ctor: "_Tuple3",_0: x,_1: chroma,_2: 0} : _U.cmp(hue$,3) < 0 ? {ctor: "_Tuple3",_0: 0,_1: chroma,_2: x} : _U.cmp(hue$,4) < 0 ? {ctor: "_Tuple3"
-                                                                                                                                               ,_0: 0
-                                                                                                                                               ,_1: x
-                                                                                                                                               ,_2: chroma} : _U.cmp(hue$,
-      5) < 0 ? {ctor: "_Tuple3",_0: x,_1: 0,_2: chroma} : _U.cmp(hue$,6) < 0 ? {ctor: "_Tuple3",_0: chroma,_1: 0,_2: x} : {ctor: "_Tuple3",_0: 0,_1: 0,_2: 0};
-      var r = _p0._0;
-      var g = _p0._1;
-      var b = _p0._2;
-      var m = lightness - chroma / 2;
-      return {ctor: "_Tuple3",_0: r + m,_1: g + m,_2: b + m};
-   });
-   var toRgb = function (color) {
-      var _p1 = color;
-      if (_p1.ctor === "RGBA") {
-            return {red: _p1._0,green: _p1._1,blue: _p1._2,alpha: _p1._3};
-         } else {
-            var _p2 = A3(hslToRgb,_p1._0,_p1._1,_p1._2);
-            var r = _p2._0;
-            var g = _p2._1;
-            var b = _p2._2;
-            return {red: $Basics.round(255 * r),green: $Basics.round(255 * g),blue: $Basics.round(255 * b),alpha: _p1._3};
-         }
-   };
-   var toHsl = function (color) {
-      var _p3 = color;
-      if (_p3.ctor === "HSLA") {
-            return {hue: _p3._0,saturation: _p3._1,lightness: _p3._2,alpha: _p3._3};
-         } else {
-            var _p4 = A3(rgbToHsl,_p3._0,_p3._1,_p3._2);
-            var h = _p4._0;
-            var s = _p4._1;
-            var l = _p4._2;
-            return {hue: h,saturation: s,lightness: l,alpha: _p3._3};
-         }
-   };
-   var HSLA = F4(function (a,b,c,d) {    return {ctor: "HSLA",_0: a,_1: b,_2: c,_3: d};});
-   var hsla = F4(function (hue,saturation,lightness,alpha) {
-      return A4(HSLA,hue - $Basics.turns($Basics.toFloat($Basics.floor(hue / (2 * $Basics.pi)))),saturation,lightness,alpha);
-   });
-   var hsl = F3(function (hue,saturation,lightness) {    return A4(hsla,hue,saturation,lightness,1);});
-   var complement = function (color) {
-      var _p5 = color;
-      if (_p5.ctor === "HSLA") {
-            return A4(hsla,_p5._0 + $Basics.degrees(180),_p5._1,_p5._2,_p5._3);
-         } else {
-            var _p6 = A3(rgbToHsl,_p5._0,_p5._1,_p5._2);
-            var h = _p6._0;
-            var s = _p6._1;
-            var l = _p6._2;
-            return A4(hsla,h + $Basics.degrees(180),s,l,_p5._3);
-         }
-   };
-   var grayscale = function (p) {    return A4(HSLA,0,0,1 - p,1);};
-   var greyscale = function (p) {    return A4(HSLA,0,0,1 - p,1);};
-   var RGBA = F4(function (a,b,c,d) {    return {ctor: "RGBA",_0: a,_1: b,_2: c,_3: d};});
-   var rgba = RGBA;
-   var rgb = F3(function (r,g,b) {    return A4(RGBA,r,g,b,1);});
-   var lightRed = A4(RGBA,239,41,41,1);
-   var red = A4(RGBA,204,0,0,1);
-   var darkRed = A4(RGBA,164,0,0,1);
-   var lightOrange = A4(RGBA,252,175,62,1);
-   var orange = A4(RGBA,245,121,0,1);
-   var darkOrange = A4(RGBA,206,92,0,1);
-   var lightYellow = A4(RGBA,255,233,79,1);
-   var yellow = A4(RGBA,237,212,0,1);
-   var darkYellow = A4(RGBA,196,160,0,1);
-   var lightGreen = A4(RGBA,138,226,52,1);
-   var green = A4(RGBA,115,210,22,1);
-   var darkGreen = A4(RGBA,78,154,6,1);
-   var lightBlue = A4(RGBA,114,159,207,1);
-   var blue = A4(RGBA,52,101,164,1);
-   var darkBlue = A4(RGBA,32,74,135,1);
-   var lightPurple = A4(RGBA,173,127,168,1);
-   var purple = A4(RGBA,117,80,123,1);
-   var darkPurple = A4(RGBA,92,53,102,1);
-   var lightBrown = A4(RGBA,233,185,110,1);
-   var brown = A4(RGBA,193,125,17,1);
-   var darkBrown = A4(RGBA,143,89,2,1);
-   var black = A4(RGBA,0,0,0,1);
-   var white = A4(RGBA,255,255,255,1);
-   var lightGrey = A4(RGBA,238,238,236,1);
-   var grey = A4(RGBA,211,215,207,1);
-   var darkGrey = A4(RGBA,186,189,182,1);
-   var lightGray = A4(RGBA,238,238,236,1);
-   var gray = A4(RGBA,211,215,207,1);
-   var darkGray = A4(RGBA,186,189,182,1);
-   var lightCharcoal = A4(RGBA,136,138,133,1);
-   var charcoal = A4(RGBA,85,87,83,1);
-   var darkCharcoal = A4(RGBA,46,52,54,1);
-   return _elm.Color.values = {_op: _op
-                              ,rgb: rgb
-                              ,rgba: rgba
-                              ,hsl: hsl
-                              ,hsla: hsla
-                              ,greyscale: greyscale
-                              ,grayscale: grayscale
-                              ,complement: complement
-                              ,linear: linear
-                              ,radial: radial
-                              ,toRgb: toRgb
-                              ,toHsl: toHsl
-                              ,red: red
-                              ,orange: orange
-                              ,yellow: yellow
-                              ,green: green
-                              ,blue: blue
-                              ,purple: purple
-                              ,brown: brown
-                              ,lightRed: lightRed
-                              ,lightOrange: lightOrange
-                              ,lightYellow: lightYellow
-                              ,lightGreen: lightGreen
-                              ,lightBlue: lightBlue
-                              ,lightPurple: lightPurple
-                              ,lightBrown: lightBrown
-                              ,darkRed: darkRed
-                              ,darkOrange: darkOrange
-                              ,darkYellow: darkYellow
-                              ,darkGreen: darkGreen
-                              ,darkBlue: darkBlue
-                              ,darkPurple: darkPurple
-                              ,darkBrown: darkBrown
-                              ,white: white
-                              ,lightGrey: lightGrey
-                              ,grey: grey
-                              ,darkGrey: darkGrey
-                              ,lightCharcoal: lightCharcoal
-                              ,charcoal: charcoal
-                              ,darkCharcoal: darkCharcoal
-                              ,black: black
-                              ,lightGray: lightGray
-                              ,gray: gray
-                              ,darkGray: darkGray};
-};
-Elm.Native.Date = {};
-Elm.Native.Date.make = function(localRuntime) {
-	localRuntime.Native = localRuntime.Native || {};
-	localRuntime.Native.Date = localRuntime.Native.Date || {};
-	if (localRuntime.Native.Date.values)
-	{
-		return localRuntime.Native.Date.values;
-	}
-
-	var Result = Elm.Result.make(localRuntime);
-
-	function readDate(str)
-	{
-		var date = new Date(str);
-		return isNaN(date.getTime())
-			? Result.Err('unable to parse \'' + str + '\' as a date')
-			: Result.Ok(date);
-	}
-
-	var dayTable = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-	var monthTable =
-		['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-		 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-
-	return localRuntime.Native.Date.values = {
-		read: readDate,
-		year: function(d) { return d.getFullYear(); },
-		month: function(d) { return { ctor: monthTable[d.getMonth()] }; },
-		day: function(d) { return d.getDate(); },
-		hour: function(d) { return d.getHours(); },
-		minute: function(d) { return d.getMinutes(); },
-		second: function(d) { return d.getSeconds(); },
-		millisecond: function(d) { return d.getMilliseconds(); },
-		toTime: function(d) { return d.getTime(); },
-		fromTime: function(t) { return new Date(t); },
-		dayOfWeek: function(d) { return { ctor: dayTable[d.getDay()] }; }
-	};
-};
-
-Elm.Native.Signal = {};
-
-Elm.Native.Signal.make = function(localRuntime) {
-	localRuntime.Native = localRuntime.Native || {};
-	localRuntime.Native.Signal = localRuntime.Native.Signal || {};
-	if (localRuntime.Native.Signal.values)
-	{
-		return localRuntime.Native.Signal.values;
-	}
-
-
-	var Task = Elm.Native.Task.make(localRuntime);
-	var Utils = Elm.Native.Utils.make(localRuntime);
-
-
-	function broadcastToKids(node, timestamp, update)
-	{
-		var kids = node.kids;
-		for (var i = kids.length; i--; )
-		{
-			kids[i].notify(timestamp, update, node.id);
-		}
-	}
-
-
-	// INPUT
-
-	function input(name, base)
-	{
-		var node = {
-			id: Utils.guid(),
-			name: 'input-' + name,
-			value: base,
-			parents: [],
-			kids: []
-		};
-
-		node.notify = function(timestamp, targetId, value) {
-			var update = targetId === node.id;
-			if (update)
-			{
-				node.value = value;
-			}
-			broadcastToKids(node, timestamp, update);
-			return update;
-		};
-
-		localRuntime.inputs.push(node);
-
-		return node;
-	}
-
-	function constant(value)
-	{
-		return input('constant', value);
-	}
-
-
-	// MAILBOX
-
-	function mailbox(base)
-	{
-		var signal = input('mailbox', base);
-
-		function send(value) {
-			return Task.asyncFunction(function(callback) {
-				localRuntime.setTimeout(function() {
-					localRuntime.notify(signal.id, value);
-				}, 0);
-				callback(Task.succeed(Utils.Tuple0));
-			});
-		}
-
-		return {
-			signal: signal,
-			address: {
-				ctor: 'Address',
-				_0: send
-			}
-		};
-	}
-
-	function sendMessage(message)
-	{
-		Task.perform(message._0);
-	}
-
-
-	// OUTPUT
-
-	function output(name, handler, parent)
-	{
-		var node = {
-			id: Utils.guid(),
-			name: 'output-' + name,
-			parents: [parent],
-			isOutput: true
-		};
-
-		node.notify = function(timestamp, parentUpdate, parentID)
-		{
-			if (parentUpdate)
-			{
-				handler(parent.value);
-			}
-		};
-
-		parent.kids.push(node);
-
-		return node;
-	}
-
-
-	// MAP
-
-	function mapMany(refreshValue, args)
-	{
-		var node = {
-			id: Utils.guid(),
-			name: 'map' + args.length,
-			value: refreshValue(),
-			parents: args,
-			kids: []
-		};
-
-		var numberOfParents = args.length;
-		var count = 0;
-		var update = false;
-
-		node.notify = function(timestamp, parentUpdate, parentID)
-		{
-			++count;
-
-			update = update || parentUpdate;
-
-			if (count === numberOfParents)
-			{
-				if (update)
-				{
-					node.value = refreshValue();
-				}
-				broadcastToKids(node, timestamp, update);
-				update = false;
-				count = 0;
-			}
-		};
-
-		for (var i = numberOfParents; i--; )
-		{
-			args[i].kids.push(node);
-		}
-
-		return node;
-	}
-
-
-	function map(func, a)
-	{
-		function refreshValue()
-		{
-			return func(a.value);
-		}
-		return mapMany(refreshValue, [a]);
-	}
-
-
-	function map2(func, a, b)
-	{
-		function refreshValue()
-		{
-			return A2( func, a.value, b.value );
-		}
-		return mapMany(refreshValue, [a, b]);
-	}
-
-
-	function map3(func, a, b, c)
-	{
-		function refreshValue()
-		{
-			return A3( func, a.value, b.value, c.value );
-		}
-		return mapMany(refreshValue, [a, b, c]);
-	}
-
-
-	function map4(func, a, b, c, d)
-	{
-		function refreshValue()
-		{
-			return A4( func, a.value, b.value, c.value, d.value );
-		}
-		return mapMany(refreshValue, [a, b, c, d]);
-	}
-
-
-	function map5(func, a, b, c, d, e)
-	{
-		function refreshValue()
-		{
-			return A5( func, a.value, b.value, c.value, d.value, e.value );
-		}
-		return mapMany(refreshValue, [a, b, c, d, e]);
-	}
-
-
-	// FOLD
-
-	function foldp(update, state, signal)
-	{
-		var node = {
-			id: Utils.guid(),
-			name: 'foldp',
-			parents: [signal],
-			kids: [],
-			value: state
-		};
-
-		node.notify = function(timestamp, parentUpdate, parentID)
-		{
-			if (parentUpdate)
-			{
-				node.value = A2( update, signal.value, node.value );
-			}
-			broadcastToKids(node, timestamp, parentUpdate);
-		};
-
-		signal.kids.push(node);
-
-		return node;
-	}
-
-
-	// TIME
-
-	function timestamp(signal)
-	{
-		var node = {
-			id: Utils.guid(),
-			name: 'timestamp',
-			value: Utils.Tuple2(localRuntime.timer.programStart, signal.value),
-			parents: [signal],
-			kids: []
-		};
-
-		node.notify = function(timestamp, parentUpdate, parentID)
-		{
-			if (parentUpdate)
-			{
-				node.value = Utils.Tuple2(timestamp, signal.value);
-			}
-			broadcastToKids(node, timestamp, parentUpdate);
-		};
-
-		signal.kids.push(node);
-
-		return node;
-	}
-
-
-	function delay(time, signal)
-	{
-		var delayed = input('delay-input-' + time, signal.value);
-
-		function handler(value)
-		{
-			setTimeout(function() {
-				localRuntime.notify(delayed.id, value);
-			}, time);
-		}
-
-		output('delay-output-' + time, handler, signal);
-
-		return delayed;
-	}
-
-
-	// MERGING
-
-	function genericMerge(tieBreaker, leftStream, rightStream)
-	{
-		var node = {
-			id: Utils.guid(),
-			name: 'merge',
-			value: A2(tieBreaker, leftStream.value, rightStream.value),
-			parents: [leftStream, rightStream],
-			kids: []
-		};
-
-		var left = { touched: false, update: false, value: null };
-		var right = { touched: false, update: false, value: null };
-
-		node.notify = function(timestamp, parentUpdate, parentID)
-		{
-			if (parentID === leftStream.id)
-			{
-				left.touched = true;
-				left.update = parentUpdate;
-				left.value = leftStream.value;
-			}
-			if (parentID === rightStream.id)
-			{
-				right.touched = true;
-				right.update = parentUpdate;
-				right.value = rightStream.value;
-			}
-
-			if (left.touched && right.touched)
-			{
-				var update = false;
-				if (left.update && right.update)
-				{
-					node.value = A2(tieBreaker, left.value, right.value);
-					update = true;
-				}
-				else if (left.update)
-				{
-					node.value = left.value;
-					update = true;
-				}
-				else if (right.update)
-				{
-					node.value = right.value;
-					update = true;
-				}
-				left.touched = false;
-				right.touched = false;
-
-				broadcastToKids(node, timestamp, update);
-			}
-		};
-
-		leftStream.kids.push(node);
-		rightStream.kids.push(node);
-
-		return node;
-	}
-
-
-	// FILTERING
-
-	function filterMap(toMaybe, base, signal)
-	{
-		var maybe = toMaybe(signal.value);
-		var node = {
-			id: Utils.guid(),
-			name: 'filterMap',
-			value: maybe.ctor === 'Nothing' ? base : maybe._0,
-			parents: [signal],
-			kids: []
-		};
-
-		node.notify = function(timestamp, parentUpdate, parentID)
-		{
-			var update = false;
-			if (parentUpdate)
-			{
-				var maybe = toMaybe(signal.value);
-				if (maybe.ctor === 'Just')
-				{
-					update = true;
-					node.value = maybe._0;
-				}
-			}
-			broadcastToKids(node, timestamp, update);
-		};
-
-		signal.kids.push(node);
-
-		return node;
-	}
-
-
-	// SAMPLING
-
-	function sampleOn(ticker, signal)
-	{
-		var node = {
-			id: Utils.guid(),
-			name: 'sampleOn',
-			value: signal.value,
-			parents: [ticker, signal],
-			kids: []
-		};
-
-		var signalTouch = false;
-		var tickerTouch = false;
-		var tickerUpdate = false;
-
-		node.notify = function(timestamp, parentUpdate, parentID)
-		{
-			if (parentID === ticker.id)
-			{
-				tickerTouch = true;
-				tickerUpdate = parentUpdate;
-			}
-			if (parentID === signal.id)
-			{
-				signalTouch = true;
-			}
-
-			if (tickerTouch && signalTouch)
-			{
-				if (tickerUpdate)
-				{
-					node.value = signal.value;
-				}
-				tickerTouch = false;
-				signalTouch = false;
-
-				broadcastToKids(node, timestamp, tickerUpdate);
-			}
-		};
-
-		ticker.kids.push(node);
-		signal.kids.push(node);
-
-		return node;
-	}
-
-
-	// DROP REPEATS
-
-	function dropRepeats(signal)
-	{
-		var node = {
-			id: Utils.guid(),
-			name: 'dropRepeats',
-			value: signal.value,
-			parents: [signal],
-			kids: []
-		};
-
-		node.notify = function(timestamp, parentUpdate, parentID)
-		{
-			var update = false;
-			if (parentUpdate && !Utils.eq(node.value, signal.value))
-			{
-				node.value = signal.value;
-				update = true;
-			}
-			broadcastToKids(node, timestamp, update);
-		};
-
-		signal.kids.push(node);
-
-		return node;
-	}
-
-
-	return localRuntime.Native.Signal.values = {
-		input: input,
-		constant: constant,
-		mailbox: mailbox,
-		sendMessage: sendMessage,
-		output: output,
-		map: F2(map),
-		map2: F3(map2),
-		map3: F4(map3),
-		map4: F5(map4),
-		map5: F6(map5),
-		foldp: F3(foldp),
-		genericMerge: F3(genericMerge),
-		filterMap: F3(filterMap),
-		sampleOn: F2(sampleOn),
-		dropRepeats: dropRepeats,
-		timestamp: timestamp,
-		delay: F2(delay)
-	};
-};
-
-Elm.Native.Time = {};
-
-Elm.Native.Time.make = function(localRuntime)
-{
-	localRuntime.Native = localRuntime.Native || {};
-	localRuntime.Native.Time = localRuntime.Native.Time || {};
-	if (localRuntime.Native.Time.values)
-	{
-		return localRuntime.Native.Time.values;
-	}
-
-	var NS = Elm.Native.Signal.make(localRuntime);
-	var Maybe = Elm.Maybe.make(localRuntime);
-
-
-	// FRAMES PER SECOND
-
-	function fpsWhen(desiredFPS, isOn)
-	{
-		var msPerFrame = 1000 / desiredFPS;
-		var ticker = NS.input('fps-' + desiredFPS, null);
-
-		function notifyTicker()
-		{
-			localRuntime.notify(ticker.id, null);
-		}
-
-		function firstArg(x, y)
-		{
-			return x;
-		}
-
-		// input fires either when isOn changes, or when ticker fires.
-		// Its value is a tuple with the current timestamp, and the state of isOn
-		var input = NS.timestamp(A3(NS.map2, F2(firstArg), NS.dropRepeats(isOn), ticker));
-
-		var initialState = {
-			isOn: false,
-			time: localRuntime.timer.programStart,
-			delta: 0
-		};
-
-		var timeoutId;
-
-		function update(input, state)
-		{
-			var currentTime = input._0;
-			var isOn = input._1;
-			var wasOn = state.isOn;
-			var previousTime = state.time;
-
-			if (isOn)
-			{
-				timeoutId = localRuntime.setTimeout(notifyTicker, msPerFrame);
-			}
-			else if (wasOn)
-			{
-				clearTimeout(timeoutId);
-			}
-
-			return {
-				isOn: isOn,
-				time: currentTime,
-				delta: (isOn && !wasOn) ? 0 : currentTime - previousTime
-			};
-		}
-
-		return A2(
-			NS.map,
-			function(state) { return state.delta; },
-			A3(NS.foldp, F2(update), update(input.value, initialState), input)
-		);
-	}
-
-
-	// EVERY
-
-	function every(t)
-	{
-		var ticker = NS.input('every-' + t, null);
-		function tellTime()
-		{
-			localRuntime.notify(ticker.id, null);
-		}
-		var clock = A2(NS.map, fst, NS.timestamp(ticker));
-		setInterval(tellTime, t);
-		return clock;
-	}
-
-
-	function fst(pair)
-	{
-		return pair._0;
-	}
-
-
-	function read(s)
-	{
-		var t = Date.parse(s);
-		return isNaN(t) ? Maybe.Nothing : Maybe.Just(t);
-	}
-
-	return localRuntime.Native.Time.values = {
-		fpsWhen: F2(fpsWhen),
-		every: every,
-		toDate: function(t) { return new Date(t); },
-		read: read
-	};
-};
-
 Elm.Native.Transform2D = {};
 Elm.Native.Transform2D.make = function(localRuntime) {
 	localRuntime.Native = localRuntime.Native || {};
@@ -4694,6 +2774,209 @@ Elm.Native.Graphics.Collage.make = function(localRuntime) {
 	};
 };
 
+Elm.Native.Color = {};
+Elm.Native.Color.make = function(localRuntime) {
+	localRuntime.Native = localRuntime.Native || {};
+	localRuntime.Native.Color = localRuntime.Native.Color || {};
+	if (localRuntime.Native.Color.values)
+	{
+		return localRuntime.Native.Color.values;
+	}
+
+	function toCss(c)
+	{
+		var format = '';
+		var colors = '';
+		if (c.ctor === 'RGBA')
+		{
+			format = 'rgb';
+			colors = c._0 + ', ' + c._1 + ', ' + c._2;
+		}
+		else
+		{
+			format = 'hsl';
+			colors = (c._0 * 180 / Math.PI) + ', ' +
+					 (c._1 * 100) + '%, ' +
+					 (c._2 * 100) + '%';
+		}
+		if (c._3 === 1)
+		{
+			return format + '(' + colors + ')';
+		}
+		else
+		{
+			return format + 'a(' + colors + ', ' + c._3 + ')';
+		}
+	}
+
+	return localRuntime.Native.Color.values = {
+		toCss: toCss
+	};
+};
+
+Elm.Color = Elm.Color || {};
+Elm.Color.make = function (_elm) {
+   "use strict";
+   _elm.Color = _elm.Color || {};
+   if (_elm.Color.values) return _elm.Color.values;
+   var _U = Elm.Native.Utils.make(_elm),$Basics = Elm.Basics.make(_elm);
+   var _op = {};
+   var Radial = F5(function (a,b,c,d,e) {    return {ctor: "Radial",_0: a,_1: b,_2: c,_3: d,_4: e};});
+   var radial = Radial;
+   var Linear = F3(function (a,b,c) {    return {ctor: "Linear",_0: a,_1: b,_2: c};});
+   var linear = Linear;
+   var fmod = F2(function (f,n) {    var integer = $Basics.floor(f);return $Basics.toFloat(A2($Basics._op["%"],integer,n)) + f - $Basics.toFloat(integer);});
+   var rgbToHsl = F3(function (red,green,blue) {
+      var b = $Basics.toFloat(blue) / 255;
+      var g = $Basics.toFloat(green) / 255;
+      var r = $Basics.toFloat(red) / 255;
+      var cMax = A2($Basics.max,A2($Basics.max,r,g),b);
+      var cMin = A2($Basics.min,A2($Basics.min,r,g),b);
+      var c = cMax - cMin;
+      var lightness = (cMax + cMin) / 2;
+      var saturation = _U.eq(lightness,0) ? 0 : c / (1 - $Basics.abs(2 * lightness - 1));
+      var hue = $Basics.degrees(60) * (_U.eq(cMax,r) ? A2(fmod,(g - b) / c,6) : _U.eq(cMax,g) ? (b - r) / c + 2 : (r - g) / c + 4);
+      return {ctor: "_Tuple3",_0: hue,_1: saturation,_2: lightness};
+   });
+   var hslToRgb = F3(function (hue,saturation,lightness) {
+      var hue$ = hue / $Basics.degrees(60);
+      var chroma = (1 - $Basics.abs(2 * lightness - 1)) * saturation;
+      var x = chroma * (1 - $Basics.abs(A2(fmod,hue$,2) - 1));
+      var _p0 = _U.cmp(hue$,0) < 0 ? {ctor: "_Tuple3",_0: 0,_1: 0,_2: 0} : _U.cmp(hue$,1) < 0 ? {ctor: "_Tuple3",_0: chroma,_1: x,_2: 0} : _U.cmp(hue$,
+      2) < 0 ? {ctor: "_Tuple3",_0: x,_1: chroma,_2: 0} : _U.cmp(hue$,3) < 0 ? {ctor: "_Tuple3",_0: 0,_1: chroma,_2: x} : _U.cmp(hue$,4) < 0 ? {ctor: "_Tuple3"
+                                                                                                                                               ,_0: 0
+                                                                                                                                               ,_1: x
+                                                                                                                                               ,_2: chroma} : _U.cmp(hue$,
+      5) < 0 ? {ctor: "_Tuple3",_0: x,_1: 0,_2: chroma} : _U.cmp(hue$,6) < 0 ? {ctor: "_Tuple3",_0: chroma,_1: 0,_2: x} : {ctor: "_Tuple3",_0: 0,_1: 0,_2: 0};
+      var r = _p0._0;
+      var g = _p0._1;
+      var b = _p0._2;
+      var m = lightness - chroma / 2;
+      return {ctor: "_Tuple3",_0: r + m,_1: g + m,_2: b + m};
+   });
+   var toRgb = function (color) {
+      var _p1 = color;
+      if (_p1.ctor === "RGBA") {
+            return {red: _p1._0,green: _p1._1,blue: _p1._2,alpha: _p1._3};
+         } else {
+            var _p2 = A3(hslToRgb,_p1._0,_p1._1,_p1._2);
+            var r = _p2._0;
+            var g = _p2._1;
+            var b = _p2._2;
+            return {red: $Basics.round(255 * r),green: $Basics.round(255 * g),blue: $Basics.round(255 * b),alpha: _p1._3};
+         }
+   };
+   var toHsl = function (color) {
+      var _p3 = color;
+      if (_p3.ctor === "HSLA") {
+            return {hue: _p3._0,saturation: _p3._1,lightness: _p3._2,alpha: _p3._3};
+         } else {
+            var _p4 = A3(rgbToHsl,_p3._0,_p3._1,_p3._2);
+            var h = _p4._0;
+            var s = _p4._1;
+            var l = _p4._2;
+            return {hue: h,saturation: s,lightness: l,alpha: _p3._3};
+         }
+   };
+   var HSLA = F4(function (a,b,c,d) {    return {ctor: "HSLA",_0: a,_1: b,_2: c,_3: d};});
+   var hsla = F4(function (hue,saturation,lightness,alpha) {
+      return A4(HSLA,hue - $Basics.turns($Basics.toFloat($Basics.floor(hue / (2 * $Basics.pi)))),saturation,lightness,alpha);
+   });
+   var hsl = F3(function (hue,saturation,lightness) {    return A4(hsla,hue,saturation,lightness,1);});
+   var complement = function (color) {
+      var _p5 = color;
+      if (_p5.ctor === "HSLA") {
+            return A4(hsla,_p5._0 + $Basics.degrees(180),_p5._1,_p5._2,_p5._3);
+         } else {
+            var _p6 = A3(rgbToHsl,_p5._0,_p5._1,_p5._2);
+            var h = _p6._0;
+            var s = _p6._1;
+            var l = _p6._2;
+            return A4(hsla,h + $Basics.degrees(180),s,l,_p5._3);
+         }
+   };
+   var grayscale = function (p) {    return A4(HSLA,0,0,1 - p,1);};
+   var greyscale = function (p) {    return A4(HSLA,0,0,1 - p,1);};
+   var RGBA = F4(function (a,b,c,d) {    return {ctor: "RGBA",_0: a,_1: b,_2: c,_3: d};});
+   var rgba = RGBA;
+   var rgb = F3(function (r,g,b) {    return A4(RGBA,r,g,b,1);});
+   var lightRed = A4(RGBA,239,41,41,1);
+   var red = A4(RGBA,204,0,0,1);
+   var darkRed = A4(RGBA,164,0,0,1);
+   var lightOrange = A4(RGBA,252,175,62,1);
+   var orange = A4(RGBA,245,121,0,1);
+   var darkOrange = A4(RGBA,206,92,0,1);
+   var lightYellow = A4(RGBA,255,233,79,1);
+   var yellow = A4(RGBA,237,212,0,1);
+   var darkYellow = A4(RGBA,196,160,0,1);
+   var lightGreen = A4(RGBA,138,226,52,1);
+   var green = A4(RGBA,115,210,22,1);
+   var darkGreen = A4(RGBA,78,154,6,1);
+   var lightBlue = A4(RGBA,114,159,207,1);
+   var blue = A4(RGBA,52,101,164,1);
+   var darkBlue = A4(RGBA,32,74,135,1);
+   var lightPurple = A4(RGBA,173,127,168,1);
+   var purple = A4(RGBA,117,80,123,1);
+   var darkPurple = A4(RGBA,92,53,102,1);
+   var lightBrown = A4(RGBA,233,185,110,1);
+   var brown = A4(RGBA,193,125,17,1);
+   var darkBrown = A4(RGBA,143,89,2,1);
+   var black = A4(RGBA,0,0,0,1);
+   var white = A4(RGBA,255,255,255,1);
+   var lightGrey = A4(RGBA,238,238,236,1);
+   var grey = A4(RGBA,211,215,207,1);
+   var darkGrey = A4(RGBA,186,189,182,1);
+   var lightGray = A4(RGBA,238,238,236,1);
+   var gray = A4(RGBA,211,215,207,1);
+   var darkGray = A4(RGBA,186,189,182,1);
+   var lightCharcoal = A4(RGBA,136,138,133,1);
+   var charcoal = A4(RGBA,85,87,83,1);
+   var darkCharcoal = A4(RGBA,46,52,54,1);
+   return _elm.Color.values = {_op: _op
+                              ,rgb: rgb
+                              ,rgba: rgba
+                              ,hsl: hsl
+                              ,hsla: hsla
+                              ,greyscale: greyscale
+                              ,grayscale: grayscale
+                              ,complement: complement
+                              ,linear: linear
+                              ,radial: radial
+                              ,toRgb: toRgb
+                              ,toHsl: toHsl
+                              ,red: red
+                              ,orange: orange
+                              ,yellow: yellow
+                              ,green: green
+                              ,blue: blue
+                              ,purple: purple
+                              ,brown: brown
+                              ,lightRed: lightRed
+                              ,lightOrange: lightOrange
+                              ,lightYellow: lightYellow
+                              ,lightGreen: lightGreen
+                              ,lightBlue: lightBlue
+                              ,lightPurple: lightPurple
+                              ,lightBrown: lightBrown
+                              ,darkRed: darkRed
+                              ,darkOrange: darkOrange
+                              ,darkYellow: darkYellow
+                              ,darkGreen: darkGreen
+                              ,darkBlue: darkBlue
+                              ,darkPurple: darkPurple
+                              ,darkBrown: darkBrown
+                              ,white: white
+                              ,lightGrey: lightGrey
+                              ,grey: grey
+                              ,darkGrey: darkGrey
+                              ,lightCharcoal: lightCharcoal
+                              ,charcoal: charcoal
+                              ,darkCharcoal: darkCharcoal
+                              ,black: black
+                              ,lightGray: lightGray
+                              ,gray: gray
+                              ,darkGray: darkGray};
+};
 
 // setup
 Elm.Native = Elm.Native || {};
@@ -6182,6 +4465,578 @@ Elm.Debug.make = function (_elm) {
    var log = $Native$Debug.log;
    return _elm.Debug.values = {_op: _op,log: log,crash: crash,watch: watch,watchSummary: watchSummary,trace: trace};
 };
+Elm.Result = Elm.Result || {};
+Elm.Result.make = function (_elm) {
+   "use strict";
+   _elm.Result = _elm.Result || {};
+   if (_elm.Result.values) return _elm.Result.values;
+   var _U = Elm.Native.Utils.make(_elm),$Maybe = Elm.Maybe.make(_elm);
+   var _op = {};
+   var toMaybe = function (result) {    var _p0 = result;if (_p0.ctor === "Ok") {    return $Maybe.Just(_p0._0);} else {    return $Maybe.Nothing;}};
+   var withDefault = F2(function (def,result) {    var _p1 = result;if (_p1.ctor === "Ok") {    return _p1._0;} else {    return def;}});
+   var Err = function (a) {    return {ctor: "Err",_0: a};};
+   var andThen = F2(function (result,callback) {    var _p2 = result;if (_p2.ctor === "Ok") {    return callback(_p2._0);} else {    return Err(_p2._0);}});
+   var Ok = function (a) {    return {ctor: "Ok",_0: a};};
+   var map = F2(function (func,ra) {    var _p3 = ra;if (_p3.ctor === "Ok") {    return Ok(func(_p3._0));} else {    return Err(_p3._0);}});
+   var map2 = F3(function (func,ra,rb) {
+      var _p4 = {ctor: "_Tuple2",_0: ra,_1: rb};
+      if (_p4._0.ctor === "Ok") {
+            if (_p4._1.ctor === "Ok") {
+                  return Ok(A2(func,_p4._0._0,_p4._1._0));
+               } else {
+                  return Err(_p4._1._0);
+               }
+         } else {
+            return Err(_p4._0._0);
+         }
+   });
+   var map3 = F4(function (func,ra,rb,rc) {
+      var _p5 = {ctor: "_Tuple3",_0: ra,_1: rb,_2: rc};
+      if (_p5._0.ctor === "Ok") {
+            if (_p5._1.ctor === "Ok") {
+                  if (_p5._2.ctor === "Ok") {
+                        return Ok(A3(func,_p5._0._0,_p5._1._0,_p5._2._0));
+                     } else {
+                        return Err(_p5._2._0);
+                     }
+               } else {
+                  return Err(_p5._1._0);
+               }
+         } else {
+            return Err(_p5._0._0);
+         }
+   });
+   var map4 = F5(function (func,ra,rb,rc,rd) {
+      var _p6 = {ctor: "_Tuple4",_0: ra,_1: rb,_2: rc,_3: rd};
+      if (_p6._0.ctor === "Ok") {
+            if (_p6._1.ctor === "Ok") {
+                  if (_p6._2.ctor === "Ok") {
+                        if (_p6._3.ctor === "Ok") {
+                              return Ok(A4(func,_p6._0._0,_p6._1._0,_p6._2._0,_p6._3._0));
+                           } else {
+                              return Err(_p6._3._0);
+                           }
+                     } else {
+                        return Err(_p6._2._0);
+                     }
+               } else {
+                  return Err(_p6._1._0);
+               }
+         } else {
+            return Err(_p6._0._0);
+         }
+   });
+   var map5 = F6(function (func,ra,rb,rc,rd,re) {
+      var _p7 = {ctor: "_Tuple5",_0: ra,_1: rb,_2: rc,_3: rd,_4: re};
+      if (_p7._0.ctor === "Ok") {
+            if (_p7._1.ctor === "Ok") {
+                  if (_p7._2.ctor === "Ok") {
+                        if (_p7._3.ctor === "Ok") {
+                              if (_p7._4.ctor === "Ok") {
+                                    return Ok(A5(func,_p7._0._0,_p7._1._0,_p7._2._0,_p7._3._0,_p7._4._0));
+                                 } else {
+                                    return Err(_p7._4._0);
+                                 }
+                           } else {
+                              return Err(_p7._3._0);
+                           }
+                     } else {
+                        return Err(_p7._2._0);
+                     }
+               } else {
+                  return Err(_p7._1._0);
+               }
+         } else {
+            return Err(_p7._0._0);
+         }
+   });
+   var formatError = F2(function (f,result) {    var _p8 = result;if (_p8.ctor === "Ok") {    return Ok(_p8._0);} else {    return Err(f(_p8._0));}});
+   var fromMaybe = F2(function (err,maybe) {    var _p9 = maybe;if (_p9.ctor === "Just") {    return Ok(_p9._0);} else {    return Err(err);}});
+   return _elm.Result.values = {_op: _op
+                               ,withDefault: withDefault
+                               ,map: map
+                               ,map2: map2
+                               ,map3: map3
+                               ,map4: map4
+                               ,map5: map5
+                               ,andThen: andThen
+                               ,toMaybe: toMaybe
+                               ,fromMaybe: fromMaybe
+                               ,formatError: formatError
+                               ,Ok: Ok
+                               ,Err: Err};
+};
+Elm.Native.Signal = {};
+
+Elm.Native.Signal.make = function(localRuntime) {
+	localRuntime.Native = localRuntime.Native || {};
+	localRuntime.Native.Signal = localRuntime.Native.Signal || {};
+	if (localRuntime.Native.Signal.values)
+	{
+		return localRuntime.Native.Signal.values;
+	}
+
+
+	var Task = Elm.Native.Task.make(localRuntime);
+	var Utils = Elm.Native.Utils.make(localRuntime);
+
+
+	function broadcastToKids(node, timestamp, update)
+	{
+		var kids = node.kids;
+		for (var i = kids.length; i--; )
+		{
+			kids[i].notify(timestamp, update, node.id);
+		}
+	}
+
+
+	// INPUT
+
+	function input(name, base)
+	{
+		var node = {
+			id: Utils.guid(),
+			name: 'input-' + name,
+			value: base,
+			parents: [],
+			kids: []
+		};
+
+		node.notify = function(timestamp, targetId, value) {
+			var update = targetId === node.id;
+			if (update)
+			{
+				node.value = value;
+			}
+			broadcastToKids(node, timestamp, update);
+			return update;
+		};
+
+		localRuntime.inputs.push(node);
+
+		return node;
+	}
+
+	function constant(value)
+	{
+		return input('constant', value);
+	}
+
+
+	// MAILBOX
+
+	function mailbox(base)
+	{
+		var signal = input('mailbox', base);
+
+		function send(value) {
+			return Task.asyncFunction(function(callback) {
+				localRuntime.setTimeout(function() {
+					localRuntime.notify(signal.id, value);
+				}, 0);
+				callback(Task.succeed(Utils.Tuple0));
+			});
+		}
+
+		return {
+			signal: signal,
+			address: {
+				ctor: 'Address',
+				_0: send
+			}
+		};
+	}
+
+	function sendMessage(message)
+	{
+		Task.perform(message._0);
+	}
+
+
+	// OUTPUT
+
+	function output(name, handler, parent)
+	{
+		var node = {
+			id: Utils.guid(),
+			name: 'output-' + name,
+			parents: [parent],
+			isOutput: true
+		};
+
+		node.notify = function(timestamp, parentUpdate, parentID)
+		{
+			if (parentUpdate)
+			{
+				handler(parent.value);
+			}
+		};
+
+		parent.kids.push(node);
+
+		return node;
+	}
+
+
+	// MAP
+
+	function mapMany(refreshValue, args)
+	{
+		var node = {
+			id: Utils.guid(),
+			name: 'map' + args.length,
+			value: refreshValue(),
+			parents: args,
+			kids: []
+		};
+
+		var numberOfParents = args.length;
+		var count = 0;
+		var update = false;
+
+		node.notify = function(timestamp, parentUpdate, parentID)
+		{
+			++count;
+
+			update = update || parentUpdate;
+
+			if (count === numberOfParents)
+			{
+				if (update)
+				{
+					node.value = refreshValue();
+				}
+				broadcastToKids(node, timestamp, update);
+				update = false;
+				count = 0;
+			}
+		};
+
+		for (var i = numberOfParents; i--; )
+		{
+			args[i].kids.push(node);
+		}
+
+		return node;
+	}
+
+
+	function map(func, a)
+	{
+		function refreshValue()
+		{
+			return func(a.value);
+		}
+		return mapMany(refreshValue, [a]);
+	}
+
+
+	function map2(func, a, b)
+	{
+		function refreshValue()
+		{
+			return A2( func, a.value, b.value );
+		}
+		return mapMany(refreshValue, [a, b]);
+	}
+
+
+	function map3(func, a, b, c)
+	{
+		function refreshValue()
+		{
+			return A3( func, a.value, b.value, c.value );
+		}
+		return mapMany(refreshValue, [a, b, c]);
+	}
+
+
+	function map4(func, a, b, c, d)
+	{
+		function refreshValue()
+		{
+			return A4( func, a.value, b.value, c.value, d.value );
+		}
+		return mapMany(refreshValue, [a, b, c, d]);
+	}
+
+
+	function map5(func, a, b, c, d, e)
+	{
+		function refreshValue()
+		{
+			return A5( func, a.value, b.value, c.value, d.value, e.value );
+		}
+		return mapMany(refreshValue, [a, b, c, d, e]);
+	}
+
+
+	// FOLD
+
+	function foldp(update, state, signal)
+	{
+		var node = {
+			id: Utils.guid(),
+			name: 'foldp',
+			parents: [signal],
+			kids: [],
+			value: state
+		};
+
+		node.notify = function(timestamp, parentUpdate, parentID)
+		{
+			if (parentUpdate)
+			{
+				node.value = A2( update, signal.value, node.value );
+			}
+			broadcastToKids(node, timestamp, parentUpdate);
+		};
+
+		signal.kids.push(node);
+
+		return node;
+	}
+
+
+	// TIME
+
+	function timestamp(signal)
+	{
+		var node = {
+			id: Utils.guid(),
+			name: 'timestamp',
+			value: Utils.Tuple2(localRuntime.timer.programStart, signal.value),
+			parents: [signal],
+			kids: []
+		};
+
+		node.notify = function(timestamp, parentUpdate, parentID)
+		{
+			if (parentUpdate)
+			{
+				node.value = Utils.Tuple2(timestamp, signal.value);
+			}
+			broadcastToKids(node, timestamp, parentUpdate);
+		};
+
+		signal.kids.push(node);
+
+		return node;
+	}
+
+
+	function delay(time, signal)
+	{
+		var delayed = input('delay-input-' + time, signal.value);
+
+		function handler(value)
+		{
+			setTimeout(function() {
+				localRuntime.notify(delayed.id, value);
+			}, time);
+		}
+
+		output('delay-output-' + time, handler, signal);
+
+		return delayed;
+	}
+
+
+	// MERGING
+
+	function genericMerge(tieBreaker, leftStream, rightStream)
+	{
+		var node = {
+			id: Utils.guid(),
+			name: 'merge',
+			value: A2(tieBreaker, leftStream.value, rightStream.value),
+			parents: [leftStream, rightStream],
+			kids: []
+		};
+
+		var left = { touched: false, update: false, value: null };
+		var right = { touched: false, update: false, value: null };
+
+		node.notify = function(timestamp, parentUpdate, parentID)
+		{
+			if (parentID === leftStream.id)
+			{
+				left.touched = true;
+				left.update = parentUpdate;
+				left.value = leftStream.value;
+			}
+			if (parentID === rightStream.id)
+			{
+				right.touched = true;
+				right.update = parentUpdate;
+				right.value = rightStream.value;
+			}
+
+			if (left.touched && right.touched)
+			{
+				var update = false;
+				if (left.update && right.update)
+				{
+					node.value = A2(tieBreaker, left.value, right.value);
+					update = true;
+				}
+				else if (left.update)
+				{
+					node.value = left.value;
+					update = true;
+				}
+				else if (right.update)
+				{
+					node.value = right.value;
+					update = true;
+				}
+				left.touched = false;
+				right.touched = false;
+
+				broadcastToKids(node, timestamp, update);
+			}
+		};
+
+		leftStream.kids.push(node);
+		rightStream.kids.push(node);
+
+		return node;
+	}
+
+
+	// FILTERING
+
+	function filterMap(toMaybe, base, signal)
+	{
+		var maybe = toMaybe(signal.value);
+		var node = {
+			id: Utils.guid(),
+			name: 'filterMap',
+			value: maybe.ctor === 'Nothing' ? base : maybe._0,
+			parents: [signal],
+			kids: []
+		};
+
+		node.notify = function(timestamp, parentUpdate, parentID)
+		{
+			var update = false;
+			if (parentUpdate)
+			{
+				var maybe = toMaybe(signal.value);
+				if (maybe.ctor === 'Just')
+				{
+					update = true;
+					node.value = maybe._0;
+				}
+			}
+			broadcastToKids(node, timestamp, update);
+		};
+
+		signal.kids.push(node);
+
+		return node;
+	}
+
+
+	// SAMPLING
+
+	function sampleOn(ticker, signal)
+	{
+		var node = {
+			id: Utils.guid(),
+			name: 'sampleOn',
+			value: signal.value,
+			parents: [ticker, signal],
+			kids: []
+		};
+
+		var signalTouch = false;
+		var tickerTouch = false;
+		var tickerUpdate = false;
+
+		node.notify = function(timestamp, parentUpdate, parentID)
+		{
+			if (parentID === ticker.id)
+			{
+				tickerTouch = true;
+				tickerUpdate = parentUpdate;
+			}
+			if (parentID === signal.id)
+			{
+				signalTouch = true;
+			}
+
+			if (tickerTouch && signalTouch)
+			{
+				if (tickerUpdate)
+				{
+					node.value = signal.value;
+				}
+				tickerTouch = false;
+				signalTouch = false;
+
+				broadcastToKids(node, timestamp, tickerUpdate);
+			}
+		};
+
+		ticker.kids.push(node);
+		signal.kids.push(node);
+
+		return node;
+	}
+
+
+	// DROP REPEATS
+
+	function dropRepeats(signal)
+	{
+		var node = {
+			id: Utils.guid(),
+			name: 'dropRepeats',
+			value: signal.value,
+			parents: [signal],
+			kids: []
+		};
+
+		node.notify = function(timestamp, parentUpdate, parentID)
+		{
+			var update = false;
+			if (parentUpdate && !Utils.eq(node.value, signal.value))
+			{
+				node.value = signal.value;
+				update = true;
+			}
+			broadcastToKids(node, timestamp, update);
+		};
+
+		signal.kids.push(node);
+
+		return node;
+	}
+
+
+	return localRuntime.Native.Signal.values = {
+		input: input,
+		constant: constant,
+		mailbox: mailbox,
+		sendMessage: sendMessage,
+		output: output,
+		map: F2(map),
+		map2: F3(map2),
+		map3: F4(map3),
+		map4: F5(map4),
+		map5: F6(map5),
+		foldp: F3(foldp),
+		genericMerge: F3(genericMerge),
+		filterMap: F3(filterMap),
+		sampleOn: F2(sampleOn),
+		dropRepeats: dropRepeats,
+		timestamp: timestamp,
+		delay: F2(delay)
+	};
+};
+
 Elm.Native.Task = {};
 
 Elm.Native.Task.make = function(localRuntime) {
@@ -6408,107 +5263,6 @@ Elm.Native.Task.make = function(localRuntime) {
 	};
 };
 
-Elm.Result = Elm.Result || {};
-Elm.Result.make = function (_elm) {
-   "use strict";
-   _elm.Result = _elm.Result || {};
-   if (_elm.Result.values) return _elm.Result.values;
-   var _U = Elm.Native.Utils.make(_elm),$Maybe = Elm.Maybe.make(_elm);
-   var _op = {};
-   var toMaybe = function (result) {    var _p0 = result;if (_p0.ctor === "Ok") {    return $Maybe.Just(_p0._0);} else {    return $Maybe.Nothing;}};
-   var withDefault = F2(function (def,result) {    var _p1 = result;if (_p1.ctor === "Ok") {    return _p1._0;} else {    return def;}});
-   var Err = function (a) {    return {ctor: "Err",_0: a};};
-   var andThen = F2(function (result,callback) {    var _p2 = result;if (_p2.ctor === "Ok") {    return callback(_p2._0);} else {    return Err(_p2._0);}});
-   var Ok = function (a) {    return {ctor: "Ok",_0: a};};
-   var map = F2(function (func,ra) {    var _p3 = ra;if (_p3.ctor === "Ok") {    return Ok(func(_p3._0));} else {    return Err(_p3._0);}});
-   var map2 = F3(function (func,ra,rb) {
-      var _p4 = {ctor: "_Tuple2",_0: ra,_1: rb};
-      if (_p4._0.ctor === "Ok") {
-            if (_p4._1.ctor === "Ok") {
-                  return Ok(A2(func,_p4._0._0,_p4._1._0));
-               } else {
-                  return Err(_p4._1._0);
-               }
-         } else {
-            return Err(_p4._0._0);
-         }
-   });
-   var map3 = F4(function (func,ra,rb,rc) {
-      var _p5 = {ctor: "_Tuple3",_0: ra,_1: rb,_2: rc};
-      if (_p5._0.ctor === "Ok") {
-            if (_p5._1.ctor === "Ok") {
-                  if (_p5._2.ctor === "Ok") {
-                        return Ok(A3(func,_p5._0._0,_p5._1._0,_p5._2._0));
-                     } else {
-                        return Err(_p5._2._0);
-                     }
-               } else {
-                  return Err(_p5._1._0);
-               }
-         } else {
-            return Err(_p5._0._0);
-         }
-   });
-   var map4 = F5(function (func,ra,rb,rc,rd) {
-      var _p6 = {ctor: "_Tuple4",_0: ra,_1: rb,_2: rc,_3: rd};
-      if (_p6._0.ctor === "Ok") {
-            if (_p6._1.ctor === "Ok") {
-                  if (_p6._2.ctor === "Ok") {
-                        if (_p6._3.ctor === "Ok") {
-                              return Ok(A4(func,_p6._0._0,_p6._1._0,_p6._2._0,_p6._3._0));
-                           } else {
-                              return Err(_p6._3._0);
-                           }
-                     } else {
-                        return Err(_p6._2._0);
-                     }
-               } else {
-                  return Err(_p6._1._0);
-               }
-         } else {
-            return Err(_p6._0._0);
-         }
-   });
-   var map5 = F6(function (func,ra,rb,rc,rd,re) {
-      var _p7 = {ctor: "_Tuple5",_0: ra,_1: rb,_2: rc,_3: rd,_4: re};
-      if (_p7._0.ctor === "Ok") {
-            if (_p7._1.ctor === "Ok") {
-                  if (_p7._2.ctor === "Ok") {
-                        if (_p7._3.ctor === "Ok") {
-                              if (_p7._4.ctor === "Ok") {
-                                    return Ok(A5(func,_p7._0._0,_p7._1._0,_p7._2._0,_p7._3._0,_p7._4._0));
-                                 } else {
-                                    return Err(_p7._4._0);
-                                 }
-                           } else {
-                              return Err(_p7._3._0);
-                           }
-                     } else {
-                        return Err(_p7._2._0);
-                     }
-               } else {
-                  return Err(_p7._1._0);
-               }
-         } else {
-            return Err(_p7._0._0);
-         }
-   });
-   var formatError = F2(function (f,result) {    var _p8 = result;if (_p8.ctor === "Ok") {    return Ok(_p8._0);} else {    return Err(f(_p8._0));}});
-   var fromMaybe = F2(function (err,maybe) {    var _p9 = maybe;if (_p9.ctor === "Just") {    return Ok(_p9._0);} else {    return Err(err);}});
-   return _elm.Result.values = {_op: _op
-                               ,withDefault: withDefault
-                               ,map: map
-                               ,map2: map2
-                               ,map3: map3
-                               ,map4: map4
-                               ,map5: map5
-                               ,andThen: andThen
-                               ,toMaybe: toMaybe
-                               ,fromMaybe: fromMaybe
-                               ,formatError: formatError
-                               ,Ok: Ok
-                               ,Err: Err};
-};
 Elm.Task = Elm.Task || {};
 Elm.Task.make = function (_elm) {
    "use strict";
@@ -6667,121 +5421,1542 @@ Elm.Signal.make = function (_elm) {
                                ,forwardTo: forwardTo
                                ,Mailbox: Mailbox};
 };
-Elm.Time = Elm.Time || {};
-Elm.Time.make = function (_elm) {
+Elm.Native.Json = {};
+
+Elm.Native.Json.make = function(localRuntime) {
+	localRuntime.Native = localRuntime.Native || {};
+	localRuntime.Native.Json = localRuntime.Native.Json || {};
+	if (localRuntime.Native.Json.values) {
+		return localRuntime.Native.Json.values;
+	}
+
+	var ElmArray = Elm.Native.Array.make(localRuntime);
+	var List = Elm.Native.List.make(localRuntime);
+	var Maybe = Elm.Maybe.make(localRuntime);
+	var Result = Elm.Result.make(localRuntime);
+	var Utils = Elm.Native.Utils.make(localRuntime);
+
+
+	function crash(expected, actual) {
+		throw new Error(
+			'expecting ' + expected + ' but got ' + JSON.stringify(actual)
+		);
+	}
+
+
+	// PRIMITIVE VALUES
+
+	function decodeNull(successValue) {
+		return function(value) {
+			if (value === null) {
+				return successValue;
+			}
+			crash('null', value);
+		};
+	}
+
+
+	function decodeString(value) {
+		if (typeof value === 'string' || value instanceof String) {
+			return value;
+		}
+		crash('a String', value);
+	}
+
+
+	function decodeFloat(value) {
+		if (typeof value === 'number') {
+			return value;
+		}
+		crash('a Float', value);
+	}
+
+
+	function decodeInt(value) {
+		if (typeof value !== 'number') {
+			crash('an Int', value);
+		}
+
+		if (value < 2147483647 && value > -2147483647 && (value | 0) === value) {
+			return value;
+		}
+
+		if (isFinite(value) && !(value % 1)) {
+			return value;
+		}
+
+		crash('an Int', value);
+	}
+
+
+	function decodeBool(value) {
+		if (typeof value === 'boolean') {
+			return value;
+		}
+		crash('a Bool', value);
+	}
+
+
+	// ARRAY
+
+	function decodeArray(decoder) {
+		return function(value) {
+			if (value instanceof Array) {
+				var len = value.length;
+				var array = new Array(len);
+				for (var i = len; i--; ) {
+					array[i] = decoder(value[i]);
+				}
+				return ElmArray.fromJSArray(array);
+			}
+			crash('an Array', value);
+		};
+	}
+
+
+	// LIST
+
+	function decodeList(decoder) {
+		return function(value) {
+			if (value instanceof Array) {
+				var len = value.length;
+				var list = List.Nil;
+				for (var i = len; i--; ) {
+					list = List.Cons( decoder(value[i]), list );
+				}
+				return list;
+			}
+			crash('a List', value);
+		};
+	}
+
+
+	// MAYBE
+
+	function decodeMaybe(decoder) {
+		return function(value) {
+			try {
+				return Maybe.Just(decoder(value));
+			} catch(e) {
+				return Maybe.Nothing;
+			}
+		};
+	}
+
+
+	// FIELDS
+
+	function decodeField(field, decoder) {
+		return function(value) {
+			var subValue = value[field];
+			if (subValue !== undefined) {
+				return decoder(subValue);
+			}
+			crash("an object with field '" + field + "'", value);
+		};
+	}
+
+
+	// OBJECTS
+
+	function decodeKeyValuePairs(decoder) {
+		return function(value) {
+			var isObject =
+				typeof value === 'object'
+					&& value !== null
+					&& !(value instanceof Array);
+
+			if (isObject) {
+				var keyValuePairs = List.Nil;
+				for (var key in value)
+				{
+					var elmValue = decoder(value[key]);
+					var pair = Utils.Tuple2(key, elmValue);
+					keyValuePairs = List.Cons(pair, keyValuePairs);
+				}
+				return keyValuePairs;
+			}
+
+			crash('an object', value);
+		};
+	}
+
+	function decodeObject1(f, d1) {
+		return function(value) {
+			return f(d1(value));
+		};
+	}
+
+	function decodeObject2(f, d1, d2) {
+		return function(value) {
+			return A2( f, d1(value), d2(value) );
+		};
+	}
+
+	function decodeObject3(f, d1, d2, d3) {
+		return function(value) {
+			return A3( f, d1(value), d2(value), d3(value) );
+		};
+	}
+
+	function decodeObject4(f, d1, d2, d3, d4) {
+		return function(value) {
+			return A4( f, d1(value), d2(value), d3(value), d4(value) );
+		};
+	}
+
+	function decodeObject5(f, d1, d2, d3, d4, d5) {
+		return function(value) {
+			return A5( f, d1(value), d2(value), d3(value), d4(value), d5(value) );
+		};
+	}
+
+	function decodeObject6(f, d1, d2, d3, d4, d5, d6) {
+		return function(value) {
+			return A6( f,
+				d1(value),
+				d2(value),
+				d3(value),
+				d4(value),
+				d5(value),
+				d6(value)
+			);
+		};
+	}
+
+	function decodeObject7(f, d1, d2, d3, d4, d5, d6, d7) {
+		return function(value) {
+			return A7( f,
+				d1(value),
+				d2(value),
+				d3(value),
+				d4(value),
+				d5(value),
+				d6(value),
+				d7(value)
+			);
+		};
+	}
+
+	function decodeObject8(f, d1, d2, d3, d4, d5, d6, d7, d8) {
+		return function(value) {
+			return A8( f,
+				d1(value),
+				d2(value),
+				d3(value),
+				d4(value),
+				d5(value),
+				d6(value),
+				d7(value),
+				d8(value)
+			);
+		};
+	}
+
+
+	// TUPLES
+
+	function decodeTuple1(f, d1) {
+		return function(value) {
+			if ( !(value instanceof Array) || value.length !== 1 ) {
+				crash('a Tuple of length 1', value);
+			}
+			return f( d1(value[0]) );
+		};
+	}
+
+	function decodeTuple2(f, d1, d2) {
+		return function(value) {
+			if ( !(value instanceof Array) || value.length !== 2 ) {
+				crash('a Tuple of length 2', value);
+			}
+			return A2( f, d1(value[0]), d2(value[1]) );
+		};
+	}
+
+	function decodeTuple3(f, d1, d2, d3) {
+		return function(value) {
+			if ( !(value instanceof Array) || value.length !== 3 ) {
+				crash('a Tuple of length 3', value);
+			}
+			return A3( f, d1(value[0]), d2(value[1]), d3(value[2]) );
+		};
+	}
+
+
+	function decodeTuple4(f, d1, d2, d3, d4) {
+		return function(value) {
+			if ( !(value instanceof Array) || value.length !== 4 ) {
+				crash('a Tuple of length 4', value);
+			}
+			return A4( f, d1(value[0]), d2(value[1]), d3(value[2]), d4(value[3]) );
+		};
+	}
+
+
+	function decodeTuple5(f, d1, d2, d3, d4, d5) {
+		return function(value) {
+			if ( !(value instanceof Array) || value.length !== 5 ) {
+				crash('a Tuple of length 5', value);
+			}
+			return A5( f,
+				d1(value[0]),
+				d2(value[1]),
+				d3(value[2]),
+				d4(value[3]),
+				d5(value[4])
+			);
+		};
+	}
+
+
+	function decodeTuple6(f, d1, d2, d3, d4, d5, d6) {
+		return function(value) {
+			if ( !(value instanceof Array) || value.length !== 6 ) {
+				crash('a Tuple of length 6', value);
+			}
+			return A6( f,
+				d1(value[0]),
+				d2(value[1]),
+				d3(value[2]),
+				d4(value[3]),
+				d5(value[4]),
+				d6(value[5])
+			);
+		};
+	}
+
+	function decodeTuple7(f, d1, d2, d3, d4, d5, d6, d7) {
+		return function(value) {
+			if ( !(value instanceof Array) || value.length !== 7 ) {
+				crash('a Tuple of length 7', value);
+			}
+			return A7( f,
+				d1(value[0]),
+				d2(value[1]),
+				d3(value[2]),
+				d4(value[3]),
+				d5(value[4]),
+				d6(value[5]),
+				d7(value[6])
+			);
+		};
+	}
+
+
+	function decodeTuple8(f, d1, d2, d3, d4, d5, d6, d7, d8) {
+		return function(value) {
+			if ( !(value instanceof Array) || value.length !== 8 ) {
+				crash('a Tuple of length 8', value);
+			}
+			return A8( f,
+				d1(value[0]),
+				d2(value[1]),
+				d3(value[2]),
+				d4(value[3]),
+				d5(value[4]),
+				d6(value[5]),
+				d7(value[6]),
+				d8(value[7])
+			);
+		};
+	}
+
+
+	// CUSTOM DECODERS
+
+	function decodeValue(value) {
+		return value;
+	}
+
+	function runDecoderValue(decoder, value) {
+		try {
+			return Result.Ok(decoder(value));
+		} catch(e) {
+			return Result.Err(e.message);
+		}
+	}
+
+	function customDecoder(decoder, callback) {
+		return function(value) {
+			var result = callback(decoder(value));
+			if (result.ctor === 'Err') {
+				throw new Error('custom decoder failed: ' + result._0);
+			}
+			return result._0;
+		};
+	}
+
+	function andThen(decode, callback) {
+		return function(value) {
+			var result = decode(value);
+			return callback(result)(value);
+		};
+	}
+
+	function fail(msg) {
+		return function(value) {
+			throw new Error(msg);
+		};
+	}
+
+	function succeed(successValue) {
+		return function(value) {
+			return successValue;
+		};
+	}
+
+
+	// ONE OF MANY
+
+	function oneOf(decoders) {
+		return function(value) {
+			var errors = [];
+			var temp = decoders;
+			while (temp.ctor !== '[]') {
+				try {
+					return temp._0(value);
+				} catch(e) {
+					errors.push(e.message);
+				}
+				temp = temp._1;
+			}
+			throw new Error('expecting one of the following:\n    ' + errors.join('\n    '));
+		};
+	}
+
+	function get(decoder, value) {
+		try {
+			return Result.Ok(decoder(value));
+		} catch(e) {
+			return Result.Err(e.message);
+		}
+	}
+
+
+	// ENCODE / DECODE
+
+	function runDecoderString(decoder, string) {
+		try {
+			return Result.Ok(decoder(JSON.parse(string)));
+		} catch(e) {
+			return Result.Err(e.message);
+		}
+	}
+
+	function encode(indentLevel, value) {
+		return JSON.stringify(value, null, indentLevel);
+	}
+
+	function identity(value) {
+		return value;
+	}
+
+	function encodeObject(keyValuePairs) {
+		var obj = {};
+		while (keyValuePairs.ctor !== '[]') {
+			var pair = keyValuePairs._0;
+			obj[pair._0] = pair._1;
+			keyValuePairs = keyValuePairs._1;
+		}
+		return obj;
+	}
+
+	return localRuntime.Native.Json.values = {
+		encode: F2(encode),
+		runDecoderString: F2(runDecoderString),
+		runDecoderValue: F2(runDecoderValue),
+
+		get: F2(get),
+		oneOf: oneOf,
+
+		decodeNull: decodeNull,
+		decodeInt: decodeInt,
+		decodeFloat: decodeFloat,
+		decodeString: decodeString,
+		decodeBool: decodeBool,
+
+		decodeMaybe: decodeMaybe,
+
+		decodeList: decodeList,
+		decodeArray: decodeArray,
+
+		decodeField: F2(decodeField),
+
+		decodeObject1: F2(decodeObject1),
+		decodeObject2: F3(decodeObject2),
+		decodeObject3: F4(decodeObject3),
+		decodeObject4: F5(decodeObject4),
+		decodeObject5: F6(decodeObject5),
+		decodeObject6: F7(decodeObject6),
+		decodeObject7: F8(decodeObject7),
+		decodeObject8: F9(decodeObject8),
+		decodeKeyValuePairs: decodeKeyValuePairs,
+
+		decodeTuple1: F2(decodeTuple1),
+		decodeTuple2: F3(decodeTuple2),
+		decodeTuple3: F4(decodeTuple3),
+		decodeTuple4: F5(decodeTuple4),
+		decodeTuple5: F6(decodeTuple5),
+		decodeTuple6: F7(decodeTuple6),
+		decodeTuple7: F8(decodeTuple7),
+		decodeTuple8: F9(decodeTuple8),
+
+		andThen: F2(andThen),
+		decodeValue: decodeValue,
+		customDecoder: F2(customDecoder),
+		fail: fail,
+		succeed: succeed,
+
+		identity: identity,
+		encodeNull: null,
+		encodeArray: ElmArray.toJSArray,
+		encodeList: List.toArray,
+		encodeObject: encodeObject
+
+	};
+};
+
+Elm.Native.Array = {};
+Elm.Native.Array.make = function(localRuntime) {
+
+	localRuntime.Native = localRuntime.Native || {};
+	localRuntime.Native.Array = localRuntime.Native.Array || {};
+	if (localRuntime.Native.Array.values)
+	{
+		return localRuntime.Native.Array.values;
+	}
+	if ('values' in Elm.Native.Array)
+	{
+		return localRuntime.Native.Array.values = Elm.Native.Array.values;
+	}
+
+	var List = Elm.Native.List.make(localRuntime);
+
+	// A RRB-Tree has two distinct data types.
+	// Leaf -> "height"  is always 0
+	//         "table"   is an array of elements
+	// Node -> "height"  is always greater than 0
+	//         "table"   is an array of child nodes
+	//         "lengths" is an array of accumulated lengths of the child nodes
+
+	// M is the maximal table size. 32 seems fast. E is the allowed increase
+	// of search steps when concatting to find an index. Lower values will
+	// decrease balancing, but will increase search steps.
+	var M = 32;
+	var E = 2;
+
+	// An empty array.
+	var empty = {
+		ctor: '_Array',
+		height: 0,
+		table: []
+	};
+
+
+	function get(i, array)
+	{
+		if (i < 0 || i >= length(array))
+		{
+			throw new Error(
+				'Index ' + i + ' is out of range. Check the length of ' +
+				'your array first or use getMaybe or getWithDefault.');
+		}
+		return unsafeGet(i, array);
+	}
+
+
+	function unsafeGet(i, array)
+	{
+		for (var x = array.height; x > 0; x--)
+		{
+			var slot = i >> (x * 5);
+			while (array.lengths[slot] <= i)
+			{
+				slot++;
+			}
+			if (slot > 0)
+			{
+				i -= array.lengths[slot - 1];
+			}
+			array = array.table[slot];
+		}
+		return array.table[i];
+	}
+
+
+	// Sets the value at the index i. Only the nodes leading to i will get
+	// copied and updated.
+	function set(i, item, array)
+	{
+		if (i < 0 || length(array) <= i)
+		{
+			return array;
+		}
+		return unsafeSet(i, item, array);
+	}
+
+
+	function unsafeSet(i, item, array)
+	{
+		array = nodeCopy(array);
+
+		if (array.height === 0)
+		{
+			array.table[i] = item;
+		}
+		else
+		{
+			var slot = getSlot(i, array);
+			if (slot > 0)
+			{
+				i -= array.lengths[slot - 1];
+			}
+			array.table[slot] = unsafeSet(i, item, array.table[slot]);
+		}
+		return array;
+	}
+
+
+	function initialize(len, f)
+	{
+		if (len <= 0)
+		{
+			return empty;
+		}
+		var h = Math.floor( Math.log(len) / Math.log(M) );
+		return initialize_(f, h, 0, len);
+	}
+
+	function initialize_(f, h, from, to)
+	{
+		if (h === 0)
+		{
+			var table = new Array((to - from) % (M + 1));
+			for (var i = 0; i < table.length; i++)
+			{
+			  table[i] = f(from + i);
+			}
+			return {
+				ctor: '_Array',
+				height: 0,
+				table: table
+			};
+		}
+
+		var step = Math.pow(M, h);
+		var table = new Array(Math.ceil((to - from) / step));
+		var lengths = new Array(table.length);
+		for (var i = 0; i < table.length; i++)
+		{
+			table[i] = initialize_(f, h - 1, from + (i * step), Math.min(from + ((i + 1) * step), to));
+			lengths[i] = length(table[i]) + (i > 0 ? lengths[i-1] : 0);
+		}
+		return {
+			ctor: '_Array',
+			height: h,
+			table: table,
+			lengths: lengths
+		};
+	}
+
+	function fromList(list)
+	{
+		if (list === List.Nil)
+		{
+			return empty;
+		}
+
+		// Allocate M sized blocks (table) and write list elements to it.
+		var table = new Array(M);
+		var nodes = [];
+		var i = 0;
+
+		while (list.ctor !== '[]')
+		{
+			table[i] = list._0;
+			list = list._1;
+			i++;
+
+			// table is full, so we can push a leaf containing it into the
+			// next node.
+			if (i === M)
+			{
+				var leaf = {
+					ctor: '_Array',
+					height: 0,
+					table: table
+				};
+				fromListPush(leaf, nodes);
+				table = new Array(M);
+				i = 0;
+			}
+		}
+
+		// Maybe there is something left on the table.
+		if (i > 0)
+		{
+			var leaf = {
+				ctor: '_Array',
+				height: 0,
+				table: table.splice(0, i)
+			};
+			fromListPush(leaf, nodes);
+		}
+
+		// Go through all of the nodes and eventually push them into higher nodes.
+		for (var h = 0; h < nodes.length - 1; h++)
+		{
+			if (nodes[h].table.length > 0)
+			{
+				fromListPush(nodes[h], nodes);
+			}
+		}
+
+		var head = nodes[nodes.length - 1];
+		if (head.height > 0 && head.table.length === 1)
+		{
+			return head.table[0];
+		}
+		else
+		{
+			return head;
+		}
+	}
+
+	// Push a node into a higher node as a child.
+	function fromListPush(toPush, nodes)
+	{
+		var h = toPush.height;
+
+		// Maybe the node on this height does not exist.
+		if (nodes.length === h)
+		{
+			var node = {
+				ctor: '_Array',
+				height: h + 1,
+				table: [],
+				lengths: []
+			};
+			nodes.push(node);
+		}
+
+		nodes[h].table.push(toPush);
+		var len = length(toPush);
+		if (nodes[h].lengths.length > 0)
+		{
+			len += nodes[h].lengths[nodes[h].lengths.length - 1];
+		}
+		nodes[h].lengths.push(len);
+
+		if (nodes[h].table.length === M)
+		{
+			fromListPush(nodes[h], nodes);
+			nodes[h] = {
+				ctor: '_Array',
+				height: h + 1,
+				table: [],
+				lengths: []
+			};
+		}
+	}
+
+	// Pushes an item via push_ to the bottom right of a tree.
+	function push(item, a)
+	{
+		var pushed = push_(item, a);
+		if (pushed !== null)
+		{
+			return pushed;
+		}
+
+		var newTree = create(item, a.height);
+		return siblise(a, newTree);
+	}
+
+	// Recursively tries to push an item to the bottom-right most
+	// tree possible. If there is no space left for the item,
+	// null will be returned.
+	function push_(item, a)
+	{
+		// Handle resursion stop at leaf level.
+		if (a.height === 0)
+		{
+			if (a.table.length < M)
+			{
+				var newA = {
+					ctor: '_Array',
+					height: 0,
+					table: a.table.slice()
+				};
+				newA.table.push(item);
+				return newA;
+			}
+			else
+			{
+			  return null;
+			}
+		}
+
+		// Recursively push
+		var pushed = push_(item, botRight(a));
+
+		// There was space in the bottom right tree, so the slot will
+		// be updated.
+		if (pushed !== null)
+		{
+			var newA = nodeCopy(a);
+			newA.table[newA.table.length - 1] = pushed;
+			newA.lengths[newA.lengths.length - 1]++;
+			return newA;
+		}
+
+		// When there was no space left, check if there is space left
+		// for a new slot with a tree which contains only the item
+		// at the bottom.
+		if (a.table.length < M)
+		{
+			var newSlot = create(item, a.height - 1);
+			var newA = nodeCopy(a);
+			newA.table.push(newSlot);
+			newA.lengths.push(newA.lengths[newA.lengths.length - 1] + length(newSlot));
+			return newA;
+		}
+		else
+		{
+			return null;
+		}
+	}
+
+	// Converts an array into a list of elements.
+	function toList(a)
+	{
+		return toList_(List.Nil, a);
+	}
+
+	function toList_(list, a)
+	{
+		for (var i = a.table.length - 1; i >= 0; i--)
+		{
+			list =
+				a.height === 0
+					? List.Cons(a.table[i], list)
+					: toList_(list, a.table[i]);
+		}
+		return list;
+	}
+
+	// Maps a function over the elements of an array.
+	function map(f, a)
+	{
+		var newA = {
+			ctor: '_Array',
+			height: a.height,
+			table: new Array(a.table.length)
+		};
+		if (a.height > 0)
+		{
+			newA.lengths = a.lengths;
+		}
+		for (var i = 0; i < a.table.length; i++)
+		{
+			newA.table[i] =
+				a.height === 0
+					? f(a.table[i])
+					: map(f, a.table[i]);
+		}
+		return newA;
+	}
+
+	// Maps a function over the elements with their index as first argument.
+	function indexedMap(f, a)
+	{
+		return indexedMap_(f, a, 0);
+	}
+
+	function indexedMap_(f, a, from)
+	{
+		var newA = {
+			ctor: '_Array',
+			height: a.height,
+			table: new Array(a.table.length)
+		};
+		if (a.height > 0)
+		{
+			newA.lengths = a.lengths;
+		}
+		for (var i = 0; i < a.table.length; i++)
+		{
+			newA.table[i] =
+				a.height === 0
+					? A2(f, from + i, a.table[i])
+					: indexedMap_(f, a.table[i], i == 0 ? from : from + a.lengths[i - 1]);
+		}
+		return newA;
+	}
+
+	function foldl(f, b, a)
+	{
+		if (a.height === 0)
+		{
+			for (var i = 0; i < a.table.length; i++)
+			{
+				b = A2(f, a.table[i], b);
+			}
+		}
+		else
+		{
+			for (var i = 0; i < a.table.length; i++)
+			{
+				b = foldl(f, b, a.table[i]);
+			}
+		}
+		return b;
+	}
+
+	function foldr(f, b, a)
+	{
+		if (a.height === 0)
+		{
+			for (var i = a.table.length; i--; )
+			{
+				b = A2(f, a.table[i], b);
+			}
+		}
+		else
+		{
+			for (var i = a.table.length; i--; )
+			{
+				b = foldr(f, b, a.table[i]);
+			}
+		}
+		return b;
+	}
+
+	// TODO: currently, it slices the right, then the left. This can be
+	// optimized.
+	function slice(from, to, a)
+	{
+		if (from < 0)
+		{
+			from += length(a);
+		}
+		if (to < 0)
+		{
+			to += length(a);
+		}
+		return sliceLeft(from, sliceRight(to, a));
+	}
+
+	function sliceRight(to, a)
+	{
+		if (to === length(a))
+		{
+			return a;
+		}
+
+		// Handle leaf level.
+		if (a.height === 0)
+		{
+			var newA = { ctor:'_Array', height:0 };
+			newA.table = a.table.slice(0, to);
+			return newA;
+		}
+
+		// Slice the right recursively.
+		var right = getSlot(to, a);
+		var sliced = sliceRight(to - (right > 0 ? a.lengths[right - 1] : 0), a.table[right]);
+
+		// Maybe the a node is not even needed, as sliced contains the whole slice.
+		if (right === 0)
+		{
+			return sliced;
+		}
+
+		// Create new node.
+		var newA = {
+			ctor: '_Array',
+			height: a.height,
+			table: a.table.slice(0, right),
+			lengths: a.lengths.slice(0, right)
+		};
+		if (sliced.table.length > 0)
+		{
+			newA.table[right] = sliced;
+			newA.lengths[right] = length(sliced) + (right > 0 ? newA.lengths[right - 1] : 0);
+		}
+		return newA;
+	}
+
+	function sliceLeft(from, a)
+	{
+		if (from === 0)
+		{
+			return a;
+		}
+
+		// Handle leaf level.
+		if (a.height === 0)
+		{
+			var newA = { ctor:'_Array', height:0 };
+			newA.table = a.table.slice(from, a.table.length + 1);
+			return newA;
+		}
+
+		// Slice the left recursively.
+		var left = getSlot(from, a);
+		var sliced = sliceLeft(from - (left > 0 ? a.lengths[left - 1] : 0), a.table[left]);
+
+		// Maybe the a node is not even needed, as sliced contains the whole slice.
+		if (left === a.table.length - 1)
+		{
+			return sliced;
+		}
+
+		// Create new node.
+		var newA = {
+			ctor: '_Array',
+			height: a.height,
+			table: a.table.slice(left, a.table.length + 1),
+			lengths: new Array(a.table.length - left)
+		};
+		newA.table[0] = sliced;
+		var len = 0;
+		for (var i = 0; i < newA.table.length; i++)
+		{
+			len += length(newA.table[i]);
+			newA.lengths[i] = len;
+		}
+
+		return newA;
+	}
+
+	// Appends two trees.
+	function append(a,b)
+	{
+		if (a.table.length === 0)
+		{
+			return b;
+		}
+		if (b.table.length === 0)
+		{
+			return a;
+		}
+
+		var c = append_(a, b);
+
+		// Check if both nodes can be crunshed together.
+		if (c[0].table.length + c[1].table.length <= M)
+		{
+			if (c[0].table.length === 0)
+			{
+				return c[1];
+			}
+			if (c[1].table.length === 0)
+			{
+				return c[0];
+			}
+
+			// Adjust .table and .lengths
+			c[0].table = c[0].table.concat(c[1].table);
+			if (c[0].height > 0)
+			{
+				var len = length(c[0]);
+				for (var i = 0; i < c[1].lengths.length; i++)
+				{
+					c[1].lengths[i] += len;
+				}
+				c[0].lengths = c[0].lengths.concat(c[1].lengths);
+			}
+
+			return c[0];
+		}
+
+		if (c[0].height > 0)
+		{
+			var toRemove = calcToRemove(a, b);
+			if (toRemove > E)
+			{
+				c = shuffle(c[0], c[1], toRemove);
+			}
+		}
+
+		return siblise(c[0], c[1]);
+	}
+
+	// Returns an array of two nodes; right and left. One node _may_ be empty.
+	function append_(a, b)
+	{
+		if (a.height === 0 && b.height === 0)
+		{
+			return [a, b];
+		}
+
+		if (a.height !== 1 || b.height !== 1)
+		{
+			if (a.height === b.height)
+			{
+				a = nodeCopy(a);
+				b = nodeCopy(b);
+				var appended = append_(botRight(a), botLeft(b));
+
+				insertRight(a, appended[1]);
+				insertLeft(b, appended[0]);
+			}
+			else if (a.height > b.height)
+			{
+				a = nodeCopy(a);
+				var appended = append_(botRight(a), b);
+
+				insertRight(a, appended[0]);
+				b = parentise(appended[1], appended[1].height + 1);
+			}
+			else
+			{
+				b = nodeCopy(b);
+				var appended = append_(a, botLeft(b));
+
+				var left = appended[0].table.length === 0 ? 0 : 1;
+				var right = left === 0 ? 1 : 0;
+				insertLeft(b, appended[left]);
+				a = parentise(appended[right], appended[right].height + 1);
+			}
+		}
+
+		// Check if balancing is needed and return based on that.
+		if (a.table.length === 0 || b.table.length === 0)
+		{
+			return [a, b];
+		}
+
+		var toRemove = calcToRemove(a, b);
+		if (toRemove <= E)
+		{
+			return [a, b];
+		}
+		return shuffle(a, b, toRemove);
+	}
+
+	// Helperfunctions for append_. Replaces a child node at the side of the parent.
+	function insertRight(parent, node)
+	{
+		var index = parent.table.length - 1;
+		parent.table[index] = node;
+		parent.lengths[index] = length(node);
+		parent.lengths[index] += index > 0 ? parent.lengths[index - 1] : 0;
+	}
+
+	function insertLeft(parent, node)
+	{
+		if (node.table.length > 0)
+		{
+			parent.table[0] = node;
+			parent.lengths[0] = length(node);
+
+			var len = length(parent.table[0]);
+			for (var i = 1; i < parent.lengths.length; i++)
+			{
+				len += length(parent.table[i]);
+				parent.lengths[i] = len;
+			}
+		}
+		else
+		{
+			parent.table.shift();
+			for (var i = 1; i < parent.lengths.length; i++)
+			{
+				parent.lengths[i] = parent.lengths[i] - parent.lengths[0];
+			}
+			parent.lengths.shift();
+		}
+	}
+
+	// Returns the extra search steps for E. Refer to the paper.
+	function calcToRemove(a, b)
+	{
+		var subLengths = 0;
+		for (var i = 0; i < a.table.length; i++)
+		{
+			subLengths += a.table[i].table.length;
+		}
+		for (var i = 0; i < b.table.length; i++)
+		{
+			subLengths += b.table[i].table.length;
+		}
+
+		var toRemove = a.table.length + b.table.length;
+		return toRemove - (Math.floor((subLengths - 1) / M) + 1);
+	}
+
+	// get2, set2 and saveSlot are helpers for accessing elements over two arrays.
+	function get2(a, b, index)
+	{
+		return index < a.length
+			? a[index]
+			: b[index - a.length];
+	}
+
+	function set2(a, b, index, value)
+	{
+		if (index < a.length)
+		{
+			a[index] = value;
+		}
+		else
+		{
+			b[index - a.length] = value;
+		}
+	}
+
+	function saveSlot(a, b, index, slot)
+	{
+		set2(a.table, b.table, index, slot);
+
+		var l = (index === 0 || index === a.lengths.length)
+			? 0
+			: get2(a.lengths, a.lengths, index - 1);
+
+		set2(a.lengths, b.lengths, index, l + length(slot));
+	}
+
+	// Creates a node or leaf with a given length at their arrays for perfomance.
+	// Is only used by shuffle.
+	function createNode(h, length)
+	{
+		if (length < 0)
+		{
+			length = 0;
+		}
+		var a = {
+			ctor: '_Array',
+			height: h,
+			table: new Array(length)
+		};
+		if (h > 0)
+		{
+			a.lengths = new Array(length);
+		}
+		return a;
+	}
+
+	// Returns an array of two balanced nodes.
+	function shuffle(a, b, toRemove)
+	{
+		var newA = createNode(a.height, Math.min(M, a.table.length + b.table.length - toRemove));
+		var newB = createNode(a.height, newA.table.length - (a.table.length + b.table.length - toRemove));
+
+		// Skip the slots with size M. More precise: copy the slot references
+		// to the new node
+		var read = 0;
+		while (get2(a.table, b.table, read).table.length % M === 0)
+		{
+			set2(newA.table, newB.table, read, get2(a.table, b.table, read));
+			set2(newA.lengths, newB.lengths, read, get2(a.lengths, b.lengths, read));
+			read++;
+		}
+
+		// Pulling items from left to right, caching in a slot before writing
+		// it into the new nodes.
+		var write = read;
+		var slot = new createNode(a.height - 1, 0);
+		var from = 0;
+
+		// If the current slot is still containing data, then there will be at
+		// least one more write, so we do not break this loop yet.
+		while (read - write - (slot.table.length > 0 ? 1 : 0) < toRemove)
+		{
+			// Find out the max possible items for copying.
+			var source = get2(a.table, b.table, read);
+			var to = Math.min(M - slot.table.length, source.table.length);
+
+			// Copy and adjust size table.
+			slot.table = slot.table.concat(source.table.slice(from, to));
+			if (slot.height > 0)
+			{
+				var len = slot.lengths.length;
+				for (var i = len; i < len + to - from; i++)
+				{
+					slot.lengths[i] = length(slot.table[i]);
+					slot.lengths[i] += (i > 0 ? slot.lengths[i - 1] : 0);
+				}
+			}
+
+			from += to;
+
+			// Only proceed to next slots[i] if the current one was
+			// fully copied.
+			if (source.table.length <= to)
+			{
+				read++; from = 0;
+			}
+
+			// Only create a new slot if the current one is filled up.
+			if (slot.table.length === M)
+			{
+				saveSlot(newA, newB, write, slot);
+				slot = createNode(a.height - 1, 0);
+				write++;
+			}
+		}
+
+		// Cleanup after the loop. Copy the last slot into the new nodes.
+		if (slot.table.length > 0)
+		{
+			saveSlot(newA, newB, write, slot);
+			write++;
+		}
+
+		// Shift the untouched slots to the left
+		while (read < a.table.length + b.table.length )
+		{
+			saveSlot(newA, newB, write, get2(a.table, b.table, read));
+			read++;
+			write++;
+		}
+
+		return [newA, newB];
+	}
+
+	// Navigation functions
+	function botRight(a)
+	{
+		return a.table[a.table.length - 1];
+	}
+	function botLeft(a)
+	{
+		return a.table[0];
+	}
+
+	// Copies a node for updating. Note that you should not use this if
+	// only updating only one of "table" or "lengths" for performance reasons.
+	function nodeCopy(a)
+	{
+		var newA = {
+			ctor: '_Array',
+			height: a.height,
+			table: a.table.slice()
+		};
+		if (a.height > 0)
+		{
+			newA.lengths = a.lengths.slice();
+		}
+		return newA;
+	}
+
+	// Returns how many items are in the tree.
+	function length(array)
+	{
+		if (array.height === 0)
+		{
+			return array.table.length;
+		}
+		else
+		{
+			return array.lengths[array.lengths.length - 1];
+		}
+	}
+
+	// Calculates in which slot of "table" the item probably is, then
+	// find the exact slot via forward searching in  "lengths". Returns the index.
+	function getSlot(i, a)
+	{
+		var slot = i >> (5 * a.height);
+		while (a.lengths[slot] <= i)
+		{
+			slot++;
+		}
+		return slot;
+	}
+
+	// Recursively creates a tree with a given height containing
+	// only the given item.
+	function create(item, h)
+	{
+		if (h === 0)
+		{
+			return {
+				ctor: '_Array',
+				height: 0,
+				table: [item]
+			};
+		}
+		return {
+			ctor: '_Array',
+			height: h,
+			table: [create(item, h - 1)],
+			lengths: [1]
+		};
+	}
+
+	// Recursively creates a tree that contains the given tree.
+	function parentise(tree, h)
+	{
+		if (h === tree.height)
+		{
+			return tree;
+		}
+
+		return {
+			ctor: '_Array',
+			height: h,
+			table: [parentise(tree, h - 1)],
+			lengths: [length(tree)]
+		};
+	}
+
+	// Emphasizes blood brotherhood beneath two trees.
+	function siblise(a, b)
+	{
+		return {
+			ctor: '_Array',
+			height: a.height + 1,
+			table: [a, b],
+			lengths: [length(a), length(a) + length(b)]
+		};
+	}
+
+	function toJSArray(a)
+	{
+		var jsArray = new Array(length(a));
+		toJSArray_(jsArray, 0, a);
+		return jsArray;
+	}
+
+	function toJSArray_(jsArray, i, a)
+	{
+		for (var t = 0; t < a.table.length; t++)
+		{
+			if (a.height === 0)
+			{
+				jsArray[i + t] = a.table[t];
+			}
+			else
+			{
+				var inc = t === 0 ? 0 : a.lengths[t - 1];
+				toJSArray_(jsArray, i + inc, a.table[t]);
+			}
+		}
+	}
+
+	function fromJSArray(jsArray)
+	{
+		if (jsArray.length === 0)
+		{
+			return empty;
+		}
+		var h = Math.floor(Math.log(jsArray.length) / Math.log(M));
+		return fromJSArray_(jsArray, h, 0, jsArray.length);
+	}
+
+	function fromJSArray_(jsArray, h, from, to)
+	{
+		if (h === 0)
+		{
+			return {
+				ctor: '_Array',
+				height: 0,
+				table: jsArray.slice(from, to)
+			};
+		}
+
+		var step = Math.pow(M, h);
+		var table = new Array(Math.ceil((to - from) / step));
+		var lengths = new Array(table.length);
+		for (var i = 0; i < table.length; i++)
+		{
+			table[i] = fromJSArray_(jsArray, h - 1, from + (i * step), Math.min(from + ((i + 1) * step), to));
+			lengths[i] = length(table[i]) + (i > 0 ? lengths[i - 1] : 0);
+		}
+		return {
+			ctor: '_Array',
+			height: h,
+			table: table,
+			lengths: lengths
+		};
+	}
+
+	Elm.Native.Array.values = {
+		empty: empty,
+		fromList: fromList,
+		toList: toList,
+		initialize: F2(initialize),
+		append: F2(append),
+		push: F2(push),
+		slice: F3(slice),
+		get: F2(get),
+		set: F3(set),
+		map: F2(map),
+		indexedMap: F2(indexedMap),
+		foldl: F3(foldl),
+		foldr: F3(foldr),
+		length: length,
+
+		toJSArray: toJSArray,
+		fromJSArray: fromJSArray
+	};
+
+	return localRuntime.Native.Array.values = Elm.Native.Array.values;
+};
+
+Elm.Array = Elm.Array || {};
+Elm.Array.make = function (_elm) {
    "use strict";
-   _elm.Time = _elm.Time || {};
-   if (_elm.Time.values) return _elm.Time.values;
+   _elm.Array = _elm.Array || {};
+   if (_elm.Array.values) return _elm.Array.values;
    var _U = Elm.Native.Utils.make(_elm),
    $Basics = Elm.Basics.make(_elm),
-   $Native$Signal = Elm.Native.Signal.make(_elm),
-   $Native$Time = Elm.Native.Time.make(_elm),
-   $Signal = Elm.Signal.make(_elm);
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Native$Array = Elm.Native.Array.make(_elm);
    var _op = {};
-   var delay = $Native$Signal.delay;
-   var since = F2(function (time,signal) {
-      var stop = A2($Signal.map,$Basics.always(-1),A2(delay,time,signal));
-      var start = A2($Signal.map,$Basics.always(1),signal);
-      var delaydiff = A3($Signal.foldp,F2(function (x,y) {    return x + y;}),0,A2($Signal.merge,start,stop));
-      return A2($Signal.map,F2(function (x,y) {    return !_U.eq(x,y);})(0),delaydiff);
+   var append = $Native$Array.append;
+   var length = $Native$Array.length;
+   var isEmpty = function (array) {    return _U.eq(length(array),0);};
+   var slice = $Native$Array.slice;
+   var set = $Native$Array.set;
+   var get = F2(function (i,array) {
+      return _U.cmp(0,i) < 1 && _U.cmp(i,$Native$Array.length(array)) < 0 ? $Maybe.Just(A2($Native$Array.get,i,array)) : $Maybe.Nothing;
    });
-   var timestamp = $Native$Signal.timestamp;
-   var every = $Native$Time.every;
-   var fpsWhen = $Native$Time.fpsWhen;
-   var fps = function (targetFrames) {    return A2(fpsWhen,targetFrames,$Signal.constant(true));};
-   var inMilliseconds = function (t) {    return t;};
-   var millisecond = 1;
-   var second = 1000 * millisecond;
-   var minute = 60 * second;
-   var hour = 60 * minute;
-   var inHours = function (t) {    return t / hour;};
-   var inMinutes = function (t) {    return t / minute;};
-   var inSeconds = function (t) {    return t / second;};
-   return _elm.Time.values = {_op: _op
-                             ,millisecond: millisecond
-                             ,second: second
-                             ,minute: minute
-                             ,hour: hour
-                             ,inMilliseconds: inMilliseconds
-                             ,inSeconds: inSeconds
-                             ,inMinutes: inMinutes
-                             ,inHours: inHours
-                             ,fps: fps
-                             ,fpsWhen: fpsWhen
-                             ,every: every
-                             ,timestamp: timestamp
-                             ,delay: delay
-                             ,since: since};
-};
-Elm.Date = Elm.Date || {};
-Elm.Date.make = function (_elm) {
-   "use strict";
-   _elm.Date = _elm.Date || {};
-   if (_elm.Date.values) return _elm.Date.values;
-   var _U = Elm.Native.Utils.make(_elm),$Native$Date = Elm.Native.Date.make(_elm),$Result = Elm.Result.make(_elm),$Time = Elm.Time.make(_elm);
-   var _op = {};
-   var millisecond = $Native$Date.millisecond;
-   var second = $Native$Date.second;
-   var minute = $Native$Date.minute;
-   var hour = $Native$Date.hour;
-   var dayOfWeek = $Native$Date.dayOfWeek;
-   var day = $Native$Date.day;
-   var month = $Native$Date.month;
-   var year = $Native$Date.year;
-   var fromTime = $Native$Date.fromTime;
-   var toTime = $Native$Date.toTime;
-   var fromString = $Native$Date.read;
-   var Dec = {ctor: "Dec"};
-   var Nov = {ctor: "Nov"};
-   var Oct = {ctor: "Oct"};
-   var Sep = {ctor: "Sep"};
-   var Aug = {ctor: "Aug"};
-   var Jul = {ctor: "Jul"};
-   var Jun = {ctor: "Jun"};
-   var May = {ctor: "May"};
-   var Apr = {ctor: "Apr"};
-   var Mar = {ctor: "Mar"};
-   var Feb = {ctor: "Feb"};
-   var Jan = {ctor: "Jan"};
-   var Sun = {ctor: "Sun"};
-   var Sat = {ctor: "Sat"};
-   var Fri = {ctor: "Fri"};
-   var Thu = {ctor: "Thu"};
-   var Wed = {ctor: "Wed"};
-   var Tue = {ctor: "Tue"};
-   var Mon = {ctor: "Mon"};
-   var Date = {ctor: "Date"};
-   return _elm.Date.values = {_op: _op
-                             ,fromString: fromString
-                             ,toTime: toTime
-                             ,fromTime: fromTime
-                             ,year: year
-                             ,month: month
-                             ,day: day
-                             ,dayOfWeek: dayOfWeek
-                             ,hour: hour
-                             ,minute: minute
-                             ,second: second
-                             ,millisecond: millisecond
-                             ,Jan: Jan
-                             ,Feb: Feb
-                             ,Mar: Mar
-                             ,Apr: Apr
-                             ,May: May
-                             ,Jun: Jun
-                             ,Jul: Jul
-                             ,Aug: Aug
-                             ,Sep: Sep
-                             ,Oct: Oct
-                             ,Nov: Nov
-                             ,Dec: Dec
-                             ,Mon: Mon
-                             ,Tue: Tue
-                             ,Wed: Wed
-                             ,Thu: Thu
-                             ,Fri: Fri
-                             ,Sat: Sat
-                             ,Sun: Sun};
+   var push = $Native$Array.push;
+   var empty = $Native$Array.empty;
+   var filter = F2(function (isOkay,arr) {
+      var update = F2(function (x,xs) {    return isOkay(x) ? A2($Native$Array.push,x,xs) : xs;});
+      return A3($Native$Array.foldl,update,$Native$Array.empty,arr);
+   });
+   var foldr = $Native$Array.foldr;
+   var foldl = $Native$Array.foldl;
+   var indexedMap = $Native$Array.indexedMap;
+   var map = $Native$Array.map;
+   var toIndexedList = function (array) {
+      return A3($List.map2,
+      F2(function (v0,v1) {    return {ctor: "_Tuple2",_0: v0,_1: v1};}),
+      _U.range(0,$Native$Array.length(array) - 1),
+      $Native$Array.toList(array));
+   };
+   var toList = $Native$Array.toList;
+   var fromList = $Native$Array.fromList;
+   var initialize = $Native$Array.initialize;
+   var repeat = F2(function (n,e) {    return A2(initialize,n,$Basics.always(e));});
+   var Array = {ctor: "Array"};
+   return _elm.Array.values = {_op: _op
+                              ,empty: empty
+                              ,repeat: repeat
+                              ,initialize: initialize
+                              ,fromList: fromList
+                              ,isEmpty: isEmpty
+                              ,length: length
+                              ,push: push
+                              ,append: append
+                              ,get: get
+                              ,set: set
+                              ,slice: slice
+                              ,toList: toList
+                              ,toIndexedList: toIndexedList
+                              ,map: map
+                              ,indexedMap: indexedMap
+                              ,filter: filter
+                              ,foldl: foldl
+                              ,foldr: foldr};
 };
 Elm.Native.String = {};
 
@@ -7125,6 +7300,61 @@ Elm.Native.String.make = function(localRuntime) {
 	};
 };
 
+Elm.Native.Char = {};
+Elm.Native.Char.make = function(localRuntime) {
+	localRuntime.Native = localRuntime.Native || {};
+	localRuntime.Native.Char = localRuntime.Native.Char || {};
+	if (localRuntime.Native.Char.values)
+	{
+		return localRuntime.Native.Char.values;
+	}
+
+	var Utils = Elm.Native.Utils.make(localRuntime);
+
+	return localRuntime.Native.Char.values = {
+		fromCode: function(c) { return Utils.chr(String.fromCharCode(c)); },
+		toCode: function(c) { return c.charCodeAt(0); },
+		toUpper: function(c) { return Utils.chr(c.toUpperCase()); },
+		toLower: function(c) { return Utils.chr(c.toLowerCase()); },
+		toLocaleUpper: function(c) { return Utils.chr(c.toLocaleUpperCase()); },
+		toLocaleLower: function(c) { return Utils.chr(c.toLocaleLowerCase()); }
+	};
+};
+
+Elm.Char = Elm.Char || {};
+Elm.Char.make = function (_elm) {
+   "use strict";
+   _elm.Char = _elm.Char || {};
+   if (_elm.Char.values) return _elm.Char.values;
+   var _U = Elm.Native.Utils.make(_elm),$Basics = Elm.Basics.make(_elm),$Native$Char = Elm.Native.Char.make(_elm);
+   var _op = {};
+   var fromCode = $Native$Char.fromCode;
+   var toCode = $Native$Char.toCode;
+   var toLocaleLower = $Native$Char.toLocaleLower;
+   var toLocaleUpper = $Native$Char.toLocaleUpper;
+   var toLower = $Native$Char.toLower;
+   var toUpper = $Native$Char.toUpper;
+   var isBetween = F3(function (low,high,$char) {    var code = toCode($char);return _U.cmp(code,toCode(low)) > -1 && _U.cmp(code,toCode(high)) < 1;});
+   var isUpper = A2(isBetween,_U.chr("A"),_U.chr("Z"));
+   var isLower = A2(isBetween,_U.chr("a"),_U.chr("z"));
+   var isDigit = A2(isBetween,_U.chr("0"),_U.chr("9"));
+   var isOctDigit = A2(isBetween,_U.chr("0"),_U.chr("7"));
+   var isHexDigit = function ($char) {
+      return isDigit($char) || (A3(isBetween,_U.chr("a"),_U.chr("f"),$char) || A3(isBetween,_U.chr("A"),_U.chr("F"),$char));
+   };
+   return _elm.Char.values = {_op: _op
+                             ,isUpper: isUpper
+                             ,isLower: isLower
+                             ,isDigit: isDigit
+                             ,isOctDigit: isOctDigit
+                             ,isHexDigit: isHexDigit
+                             ,toUpper: toUpper
+                             ,toLower: toLower
+                             ,toLocaleUpper: toLocaleUpper
+                             ,toLocaleLower: toLocaleLower
+                             ,toCode: toCode
+                             ,fromCode: fromCode};
+};
 Elm.String = Elm.String || {};
 Elm.String.make = function (_elm) {
    "use strict";
@@ -7777,502 +8007,6 @@ Elm.Dict.make = function (_elm) {
                              ,toList: toList
                              ,fromList: fromList};
 };
-Elm.Native.Json = {};
-
-Elm.Native.Json.make = function(localRuntime) {
-	localRuntime.Native = localRuntime.Native || {};
-	localRuntime.Native.Json = localRuntime.Native.Json || {};
-	if (localRuntime.Native.Json.values) {
-		return localRuntime.Native.Json.values;
-	}
-
-	var ElmArray = Elm.Native.Array.make(localRuntime);
-	var List = Elm.Native.List.make(localRuntime);
-	var Maybe = Elm.Maybe.make(localRuntime);
-	var Result = Elm.Result.make(localRuntime);
-	var Utils = Elm.Native.Utils.make(localRuntime);
-
-
-	function crash(expected, actual) {
-		throw new Error(
-			'expecting ' + expected + ' but got ' + JSON.stringify(actual)
-		);
-	}
-
-
-	// PRIMITIVE VALUES
-
-	function decodeNull(successValue) {
-		return function(value) {
-			if (value === null) {
-				return successValue;
-			}
-			crash('null', value);
-		};
-	}
-
-
-	function decodeString(value) {
-		if (typeof value === 'string' || value instanceof String) {
-			return value;
-		}
-		crash('a String', value);
-	}
-
-
-	function decodeFloat(value) {
-		if (typeof value === 'number') {
-			return value;
-		}
-		crash('a Float', value);
-	}
-
-
-	function decodeInt(value) {
-		if (typeof value !== 'number') {
-			crash('an Int', value);
-		}
-
-		if (value < 2147483647 && value > -2147483647 && (value | 0) === value) {
-			return value;
-		}
-
-		if (isFinite(value) && !(value % 1)) {
-			return value;
-		}
-
-		crash('an Int', value);
-	}
-
-
-	function decodeBool(value) {
-		if (typeof value === 'boolean') {
-			return value;
-		}
-		crash('a Bool', value);
-	}
-
-
-	// ARRAY
-
-	function decodeArray(decoder) {
-		return function(value) {
-			if (value instanceof Array) {
-				var len = value.length;
-				var array = new Array(len);
-				for (var i = len; i--; ) {
-					array[i] = decoder(value[i]);
-				}
-				return ElmArray.fromJSArray(array);
-			}
-			crash('an Array', value);
-		};
-	}
-
-
-	// LIST
-
-	function decodeList(decoder) {
-		return function(value) {
-			if (value instanceof Array) {
-				var len = value.length;
-				var list = List.Nil;
-				for (var i = len; i--; ) {
-					list = List.Cons( decoder(value[i]), list );
-				}
-				return list;
-			}
-			crash('a List', value);
-		};
-	}
-
-
-	// MAYBE
-
-	function decodeMaybe(decoder) {
-		return function(value) {
-			try {
-				return Maybe.Just(decoder(value));
-			} catch(e) {
-				return Maybe.Nothing;
-			}
-		};
-	}
-
-
-	// FIELDS
-
-	function decodeField(field, decoder) {
-		return function(value) {
-			var subValue = value[field];
-			if (subValue !== undefined) {
-				return decoder(subValue);
-			}
-			crash("an object with field '" + field + "'", value);
-		};
-	}
-
-
-	// OBJECTS
-
-	function decodeKeyValuePairs(decoder) {
-		return function(value) {
-			var isObject =
-				typeof value === 'object'
-					&& value !== null
-					&& !(value instanceof Array);
-
-			if (isObject) {
-				var keyValuePairs = List.Nil;
-				for (var key in value)
-				{
-					var elmValue = decoder(value[key]);
-					var pair = Utils.Tuple2(key, elmValue);
-					keyValuePairs = List.Cons(pair, keyValuePairs);
-				}
-				return keyValuePairs;
-			}
-
-			crash('an object', value);
-		};
-	}
-
-	function decodeObject1(f, d1) {
-		return function(value) {
-			return f(d1(value));
-		};
-	}
-
-	function decodeObject2(f, d1, d2) {
-		return function(value) {
-			return A2( f, d1(value), d2(value) );
-		};
-	}
-
-	function decodeObject3(f, d1, d2, d3) {
-		return function(value) {
-			return A3( f, d1(value), d2(value), d3(value) );
-		};
-	}
-
-	function decodeObject4(f, d1, d2, d3, d4) {
-		return function(value) {
-			return A4( f, d1(value), d2(value), d3(value), d4(value) );
-		};
-	}
-
-	function decodeObject5(f, d1, d2, d3, d4, d5) {
-		return function(value) {
-			return A5( f, d1(value), d2(value), d3(value), d4(value), d5(value) );
-		};
-	}
-
-	function decodeObject6(f, d1, d2, d3, d4, d5, d6) {
-		return function(value) {
-			return A6( f,
-				d1(value),
-				d2(value),
-				d3(value),
-				d4(value),
-				d5(value),
-				d6(value)
-			);
-		};
-	}
-
-	function decodeObject7(f, d1, d2, d3, d4, d5, d6, d7) {
-		return function(value) {
-			return A7( f,
-				d1(value),
-				d2(value),
-				d3(value),
-				d4(value),
-				d5(value),
-				d6(value),
-				d7(value)
-			);
-		};
-	}
-
-	function decodeObject8(f, d1, d2, d3, d4, d5, d6, d7, d8) {
-		return function(value) {
-			return A8( f,
-				d1(value),
-				d2(value),
-				d3(value),
-				d4(value),
-				d5(value),
-				d6(value),
-				d7(value),
-				d8(value)
-			);
-		};
-	}
-
-
-	// TUPLES
-
-	function decodeTuple1(f, d1) {
-		return function(value) {
-			if ( !(value instanceof Array) || value.length !== 1 ) {
-				crash('a Tuple of length 1', value);
-			}
-			return f( d1(value[0]) );
-		};
-	}
-
-	function decodeTuple2(f, d1, d2) {
-		return function(value) {
-			if ( !(value instanceof Array) || value.length !== 2 ) {
-				crash('a Tuple of length 2', value);
-			}
-			return A2( f, d1(value[0]), d2(value[1]) );
-		};
-	}
-
-	function decodeTuple3(f, d1, d2, d3) {
-		return function(value) {
-			if ( !(value instanceof Array) || value.length !== 3 ) {
-				crash('a Tuple of length 3', value);
-			}
-			return A3( f, d1(value[0]), d2(value[1]), d3(value[2]) );
-		};
-	}
-
-
-	function decodeTuple4(f, d1, d2, d3, d4) {
-		return function(value) {
-			if ( !(value instanceof Array) || value.length !== 4 ) {
-				crash('a Tuple of length 4', value);
-			}
-			return A4( f, d1(value[0]), d2(value[1]), d3(value[2]), d4(value[3]) );
-		};
-	}
-
-
-	function decodeTuple5(f, d1, d2, d3, d4, d5) {
-		return function(value) {
-			if ( !(value instanceof Array) || value.length !== 5 ) {
-				crash('a Tuple of length 5', value);
-			}
-			return A5( f,
-				d1(value[0]),
-				d2(value[1]),
-				d3(value[2]),
-				d4(value[3]),
-				d5(value[4])
-			);
-		};
-	}
-
-
-	function decodeTuple6(f, d1, d2, d3, d4, d5, d6) {
-		return function(value) {
-			if ( !(value instanceof Array) || value.length !== 6 ) {
-				crash('a Tuple of length 6', value);
-			}
-			return A6( f,
-				d1(value[0]),
-				d2(value[1]),
-				d3(value[2]),
-				d4(value[3]),
-				d5(value[4]),
-				d6(value[5])
-			);
-		};
-	}
-
-	function decodeTuple7(f, d1, d2, d3, d4, d5, d6, d7) {
-		return function(value) {
-			if ( !(value instanceof Array) || value.length !== 7 ) {
-				crash('a Tuple of length 7', value);
-			}
-			return A7( f,
-				d1(value[0]),
-				d2(value[1]),
-				d3(value[2]),
-				d4(value[3]),
-				d5(value[4]),
-				d6(value[5]),
-				d7(value[6])
-			);
-		};
-	}
-
-
-	function decodeTuple8(f, d1, d2, d3, d4, d5, d6, d7, d8) {
-		return function(value) {
-			if ( !(value instanceof Array) || value.length !== 8 ) {
-				crash('a Tuple of length 8', value);
-			}
-			return A8( f,
-				d1(value[0]),
-				d2(value[1]),
-				d3(value[2]),
-				d4(value[3]),
-				d5(value[4]),
-				d6(value[5]),
-				d7(value[6]),
-				d8(value[7])
-			);
-		};
-	}
-
-
-	// CUSTOM DECODERS
-
-	function decodeValue(value) {
-		return value;
-	}
-
-	function runDecoderValue(decoder, value) {
-		try {
-			return Result.Ok(decoder(value));
-		} catch(e) {
-			return Result.Err(e.message);
-		}
-	}
-
-	function customDecoder(decoder, callback) {
-		return function(value) {
-			var result = callback(decoder(value));
-			if (result.ctor === 'Err') {
-				throw new Error('custom decoder failed: ' + result._0);
-			}
-			return result._0;
-		};
-	}
-
-	function andThen(decode, callback) {
-		return function(value) {
-			var result = decode(value);
-			return callback(result)(value);
-		};
-	}
-
-	function fail(msg) {
-		return function(value) {
-			throw new Error(msg);
-		};
-	}
-
-	function succeed(successValue) {
-		return function(value) {
-			return successValue;
-		};
-	}
-
-
-	// ONE OF MANY
-
-	function oneOf(decoders) {
-		return function(value) {
-			var errors = [];
-			var temp = decoders;
-			while (temp.ctor !== '[]') {
-				try {
-					return temp._0(value);
-				} catch(e) {
-					errors.push(e.message);
-				}
-				temp = temp._1;
-			}
-			throw new Error('expecting one of the following:\n    ' + errors.join('\n    '));
-		};
-	}
-
-	function get(decoder, value) {
-		try {
-			return Result.Ok(decoder(value));
-		} catch(e) {
-			return Result.Err(e.message);
-		}
-	}
-
-
-	// ENCODE / DECODE
-
-	function runDecoderString(decoder, string) {
-		try {
-			return Result.Ok(decoder(JSON.parse(string)));
-		} catch(e) {
-			return Result.Err(e.message);
-		}
-	}
-
-	function encode(indentLevel, value) {
-		return JSON.stringify(value, null, indentLevel);
-	}
-
-	function identity(value) {
-		return value;
-	}
-
-	function encodeObject(keyValuePairs) {
-		var obj = {};
-		while (keyValuePairs.ctor !== '[]') {
-			var pair = keyValuePairs._0;
-			obj[pair._0] = pair._1;
-			keyValuePairs = keyValuePairs._1;
-		}
-		return obj;
-	}
-
-	return localRuntime.Native.Json.values = {
-		encode: F2(encode),
-		runDecoderString: F2(runDecoderString),
-		runDecoderValue: F2(runDecoderValue),
-
-		get: F2(get),
-		oneOf: oneOf,
-
-		decodeNull: decodeNull,
-		decodeInt: decodeInt,
-		decodeFloat: decodeFloat,
-		decodeString: decodeString,
-		decodeBool: decodeBool,
-
-		decodeMaybe: decodeMaybe,
-
-		decodeList: decodeList,
-		decodeArray: decodeArray,
-
-		decodeField: F2(decodeField),
-
-		decodeObject1: F2(decodeObject1),
-		decodeObject2: F3(decodeObject2),
-		decodeObject3: F4(decodeObject3),
-		decodeObject4: F5(decodeObject4),
-		decodeObject5: F6(decodeObject5),
-		decodeObject6: F7(decodeObject6),
-		decodeObject7: F8(decodeObject7),
-		decodeObject8: F9(decodeObject8),
-		decodeKeyValuePairs: decodeKeyValuePairs,
-
-		decodeTuple1: F2(decodeTuple1),
-		decodeTuple2: F3(decodeTuple2),
-		decodeTuple3: F4(decodeTuple3),
-		decodeTuple4: F5(decodeTuple4),
-		decodeTuple5: F6(decodeTuple5),
-		decodeTuple6: F7(decodeTuple6),
-		decodeTuple7: F8(decodeTuple7),
-		decodeTuple8: F9(decodeTuple8),
-
-		andThen: F2(andThen),
-		decodeValue: decodeValue,
-		customDecoder: F2(customDecoder),
-		fail: fail,
-		succeed: succeed,
-
-		identity: identity,
-		encodeNull: null,
-		encodeArray: ElmArray.toJSArray,
-		encodeList: List.toArray,
-		encodeObject: encodeObject
-
-	};
-};
-
 Elm.Json = Elm.Json || {};
 Elm.Json.Encode = Elm.Json.Encode || {};
 Elm.Json.Encode.make = function (_elm) {
@@ -8394,6 +8128,959 @@ Elm.Json.Decode.make = function (_elm) {
                                     ,andThen: andThen
                                     ,value: value
                                     ,customDecoder: customDecoder};
+};
+Elm.Native.Date = {};
+Elm.Native.Date.make = function(localRuntime) {
+	localRuntime.Native = localRuntime.Native || {};
+	localRuntime.Native.Date = localRuntime.Native.Date || {};
+	if (localRuntime.Native.Date.values)
+	{
+		return localRuntime.Native.Date.values;
+	}
+
+	var Result = Elm.Result.make(localRuntime);
+
+	function readDate(str)
+	{
+		var date = new Date(str);
+		return isNaN(date.getTime())
+			? Result.Err('unable to parse \'' + str + '\' as a date')
+			: Result.Ok(date);
+	}
+
+	var dayTable = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+	var monthTable =
+		['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+		 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+
+	return localRuntime.Native.Date.values = {
+		read: readDate,
+		year: function(d) { return d.getFullYear(); },
+		month: function(d) { return { ctor: monthTable[d.getMonth()] }; },
+		day: function(d) { return d.getDate(); },
+		hour: function(d) { return d.getHours(); },
+		minute: function(d) { return d.getMinutes(); },
+		second: function(d) { return d.getSeconds(); },
+		millisecond: function(d) { return d.getMilliseconds(); },
+		toTime: function(d) { return d.getTime(); },
+		fromTime: function(t) { return new Date(t); },
+		dayOfWeek: function(d) { return { ctor: dayTable[d.getDay()] }; }
+	};
+};
+
+Elm.Native.Time = {};
+
+Elm.Native.Time.make = function(localRuntime)
+{
+	localRuntime.Native = localRuntime.Native || {};
+	localRuntime.Native.Time = localRuntime.Native.Time || {};
+	if (localRuntime.Native.Time.values)
+	{
+		return localRuntime.Native.Time.values;
+	}
+
+	var NS = Elm.Native.Signal.make(localRuntime);
+	var Maybe = Elm.Maybe.make(localRuntime);
+
+
+	// FRAMES PER SECOND
+
+	function fpsWhen(desiredFPS, isOn)
+	{
+		var msPerFrame = 1000 / desiredFPS;
+		var ticker = NS.input('fps-' + desiredFPS, null);
+
+		function notifyTicker()
+		{
+			localRuntime.notify(ticker.id, null);
+		}
+
+		function firstArg(x, y)
+		{
+			return x;
+		}
+
+		// input fires either when isOn changes, or when ticker fires.
+		// Its value is a tuple with the current timestamp, and the state of isOn
+		var input = NS.timestamp(A3(NS.map2, F2(firstArg), NS.dropRepeats(isOn), ticker));
+
+		var initialState = {
+			isOn: false,
+			time: localRuntime.timer.programStart,
+			delta: 0
+		};
+
+		var timeoutId;
+
+		function update(input, state)
+		{
+			var currentTime = input._0;
+			var isOn = input._1;
+			var wasOn = state.isOn;
+			var previousTime = state.time;
+
+			if (isOn)
+			{
+				timeoutId = localRuntime.setTimeout(notifyTicker, msPerFrame);
+			}
+			else if (wasOn)
+			{
+				clearTimeout(timeoutId);
+			}
+
+			return {
+				isOn: isOn,
+				time: currentTime,
+				delta: (isOn && !wasOn) ? 0 : currentTime - previousTime
+			};
+		}
+
+		return A2(
+			NS.map,
+			function(state) { return state.delta; },
+			A3(NS.foldp, F2(update), update(input.value, initialState), input)
+		);
+	}
+
+
+	// EVERY
+
+	function every(t)
+	{
+		var ticker = NS.input('every-' + t, null);
+		function tellTime()
+		{
+			localRuntime.notify(ticker.id, null);
+		}
+		var clock = A2(NS.map, fst, NS.timestamp(ticker));
+		setInterval(tellTime, t);
+		return clock;
+	}
+
+
+	function fst(pair)
+	{
+		return pair._0;
+	}
+
+
+	function read(s)
+	{
+		var t = Date.parse(s);
+		return isNaN(t) ? Maybe.Nothing : Maybe.Just(t);
+	}
+
+	return localRuntime.Native.Time.values = {
+		fpsWhen: F2(fpsWhen),
+		every: every,
+		toDate: function(t) { return new Date(t); },
+		read: read
+	};
+};
+
+Elm.Time = Elm.Time || {};
+Elm.Time.make = function (_elm) {
+   "use strict";
+   _elm.Time = _elm.Time || {};
+   if (_elm.Time.values) return _elm.Time.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Native$Signal = Elm.Native.Signal.make(_elm),
+   $Native$Time = Elm.Native.Time.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var delay = $Native$Signal.delay;
+   var since = F2(function (time,signal) {
+      var stop = A2($Signal.map,$Basics.always(-1),A2(delay,time,signal));
+      var start = A2($Signal.map,$Basics.always(1),signal);
+      var delaydiff = A3($Signal.foldp,F2(function (x,y) {    return x + y;}),0,A2($Signal.merge,start,stop));
+      return A2($Signal.map,F2(function (x,y) {    return !_U.eq(x,y);})(0),delaydiff);
+   });
+   var timestamp = $Native$Signal.timestamp;
+   var every = $Native$Time.every;
+   var fpsWhen = $Native$Time.fpsWhen;
+   var fps = function (targetFrames) {    return A2(fpsWhen,targetFrames,$Signal.constant(true));};
+   var inMilliseconds = function (t) {    return t;};
+   var millisecond = 1;
+   var second = 1000 * millisecond;
+   var minute = 60 * second;
+   var hour = 60 * minute;
+   var inHours = function (t) {    return t / hour;};
+   var inMinutes = function (t) {    return t / minute;};
+   var inSeconds = function (t) {    return t / second;};
+   return _elm.Time.values = {_op: _op
+                             ,millisecond: millisecond
+                             ,second: second
+                             ,minute: minute
+                             ,hour: hour
+                             ,inMilliseconds: inMilliseconds
+                             ,inSeconds: inSeconds
+                             ,inMinutes: inMinutes
+                             ,inHours: inHours
+                             ,fps: fps
+                             ,fpsWhen: fpsWhen
+                             ,every: every
+                             ,timestamp: timestamp
+                             ,delay: delay
+                             ,since: since};
+};
+Elm.Date = Elm.Date || {};
+Elm.Date.make = function (_elm) {
+   "use strict";
+   _elm.Date = _elm.Date || {};
+   if (_elm.Date.values) return _elm.Date.values;
+   var _U = Elm.Native.Utils.make(_elm),$Native$Date = Elm.Native.Date.make(_elm),$Result = Elm.Result.make(_elm),$Time = Elm.Time.make(_elm);
+   var _op = {};
+   var millisecond = $Native$Date.millisecond;
+   var second = $Native$Date.second;
+   var minute = $Native$Date.minute;
+   var hour = $Native$Date.hour;
+   var dayOfWeek = $Native$Date.dayOfWeek;
+   var day = $Native$Date.day;
+   var month = $Native$Date.month;
+   var year = $Native$Date.year;
+   var fromTime = $Native$Date.fromTime;
+   var toTime = $Native$Date.toTime;
+   var fromString = $Native$Date.read;
+   var Dec = {ctor: "Dec"};
+   var Nov = {ctor: "Nov"};
+   var Oct = {ctor: "Oct"};
+   var Sep = {ctor: "Sep"};
+   var Aug = {ctor: "Aug"};
+   var Jul = {ctor: "Jul"};
+   var Jun = {ctor: "Jun"};
+   var May = {ctor: "May"};
+   var Apr = {ctor: "Apr"};
+   var Mar = {ctor: "Mar"};
+   var Feb = {ctor: "Feb"};
+   var Jan = {ctor: "Jan"};
+   var Sun = {ctor: "Sun"};
+   var Sat = {ctor: "Sat"};
+   var Fri = {ctor: "Fri"};
+   var Thu = {ctor: "Thu"};
+   var Wed = {ctor: "Wed"};
+   var Tue = {ctor: "Tue"};
+   var Mon = {ctor: "Mon"};
+   var Date = {ctor: "Date"};
+   return _elm.Date.values = {_op: _op
+                             ,fromString: fromString
+                             ,toTime: toTime
+                             ,fromTime: fromTime
+                             ,year: year
+                             ,month: month
+                             ,day: day
+                             ,dayOfWeek: dayOfWeek
+                             ,hour: hour
+                             ,minute: minute
+                             ,second: second
+                             ,millisecond: millisecond
+                             ,Jan: Jan
+                             ,Feb: Feb
+                             ,Mar: Mar
+                             ,Apr: Apr
+                             ,May: May
+                             ,Jun: Jun
+                             ,Jul: Jul
+                             ,Aug: Aug
+                             ,Sep: Sep
+                             ,Oct: Oct
+                             ,Nov: Nov
+                             ,Dec: Dec
+                             ,Mon: Mon
+                             ,Tue: Tue
+                             ,Wed: Wed
+                             ,Thu: Thu
+                             ,Fri: Fri
+                             ,Sat: Sat
+                             ,Sun: Sun};
+};
+Elm.Set = Elm.Set || {};
+Elm.Set.make = function (_elm) {
+   "use strict";
+   _elm.Set = _elm.Set || {};
+   if (_elm.Set.values) return _elm.Set.values;
+   var _U = Elm.Native.Utils.make(_elm),$Basics = Elm.Basics.make(_elm),$Dict = Elm.Dict.make(_elm),$List = Elm.List.make(_elm);
+   var _op = {};
+   var foldr = F3(function (f,b,_p0) {    var _p1 = _p0;return A3($Dict.foldr,F3(function (k,_p2,b) {    return A2(f,k,b);}),b,_p1._0);});
+   var foldl = F3(function (f,b,_p3) {    var _p4 = _p3;return A3($Dict.foldl,F3(function (k,_p5,b) {    return A2(f,k,b);}),b,_p4._0);});
+   var toList = function (_p6) {    var _p7 = _p6;return $Dict.keys(_p7._0);};
+   var size = function (_p8) {    var _p9 = _p8;return $Dict.size(_p9._0);};
+   var member = F2(function (k,_p10) {    var _p11 = _p10;return A2($Dict.member,k,_p11._0);});
+   var isEmpty = function (_p12) {    var _p13 = _p12;return $Dict.isEmpty(_p13._0);};
+   var Set_elm_builtin = function (a) {    return {ctor: "Set_elm_builtin",_0: a};};
+   var empty = Set_elm_builtin($Dict.empty);
+   var singleton = function (k) {    return Set_elm_builtin(A2($Dict.singleton,k,{ctor: "_Tuple0"}));};
+   var insert = F2(function (k,_p14) {    var _p15 = _p14;return Set_elm_builtin(A3($Dict.insert,k,{ctor: "_Tuple0"},_p15._0));});
+   var fromList = function (xs) {    return A3($List.foldl,insert,empty,xs);};
+   var map = F2(function (f,s) {    return fromList(A2($List.map,f,toList(s)));});
+   var remove = F2(function (k,_p16) {    var _p17 = _p16;return Set_elm_builtin(A2($Dict.remove,k,_p17._0));});
+   var union = F2(function (_p19,_p18) {    var _p20 = _p19;var _p21 = _p18;return Set_elm_builtin(A2($Dict.union,_p20._0,_p21._0));});
+   var intersect = F2(function (_p23,_p22) {    var _p24 = _p23;var _p25 = _p22;return Set_elm_builtin(A2($Dict.intersect,_p24._0,_p25._0));});
+   var diff = F2(function (_p27,_p26) {    var _p28 = _p27;var _p29 = _p26;return Set_elm_builtin(A2($Dict.diff,_p28._0,_p29._0));});
+   var filter = F2(function (p,_p30) {    var _p31 = _p30;return Set_elm_builtin(A2($Dict.filter,F2(function (k,_p32) {    return p(k);}),_p31._0));});
+   var partition = F2(function (p,_p33) {
+      var _p34 = _p33;
+      var _p35 = A2($Dict.partition,F2(function (k,_p36) {    return p(k);}),_p34._0);
+      var p1 = _p35._0;
+      var p2 = _p35._1;
+      return {ctor: "_Tuple2",_0: Set_elm_builtin(p1),_1: Set_elm_builtin(p2)};
+   });
+   return _elm.Set.values = {_op: _op
+                            ,empty: empty
+                            ,singleton: singleton
+                            ,insert: insert
+                            ,remove: remove
+                            ,isEmpty: isEmpty
+                            ,member: member
+                            ,size: size
+                            ,foldl: foldl
+                            ,foldr: foldr
+                            ,map: map
+                            ,filter: filter
+                            ,partition: partition
+                            ,union: union
+                            ,intersect: intersect
+                            ,diff: diff
+                            ,toList: toList
+                            ,fromList: fromList};
+};
+Elm.Json = Elm.Json || {};
+Elm.Json.Decode = Elm.Json.Decode || {};
+Elm.Json.Decode.Extra = Elm.Json.Decode.Extra || {};
+Elm.Json.Decode.Extra.make = function (_elm) {
+   "use strict";
+   _elm.Json = _elm.Json || {};
+   _elm.Json.Decode = _elm.Json.Decode || {};
+   _elm.Json.Decode.Extra = _elm.Json.Decode.Extra || {};
+   if (_elm.Json.Decode.Extra.values) return _elm.Json.Decode.Extra.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Date = Elm.Date.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Dict = Elm.Dict.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Set = Elm.Set.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var lazy = function (getDecoder) {
+      return A2($Json$Decode.customDecoder,
+      $Json$Decode.value,
+      function (rawValue) {
+         return A2($Json$Decode.decodeValue,getDecoder({ctor: "_Tuple0"}),rawValue);
+      });
+   };
+   var maybeNull = function (decoder) {    return $Json$Decode.oneOf(_U.list([$Json$Decode.$null($Maybe.Nothing),A2($Json$Decode.map,$Maybe.Just,decoder)]));};
+   var withDefault = F2(function (fallback,decoder) {
+      return A2($Json$Decode.andThen,$Json$Decode.maybe(decoder),function (_p0) {    return $Json$Decode.succeed(A2($Maybe.withDefault,fallback,_p0));});
+   });
+   var decodeDictFromTuples = F2(function (keyDecoder,tuples) {
+      var _p1 = tuples;
+      if (_p1.ctor === "[]") {
+            return $Json$Decode.succeed($Dict.empty);
+         } else {
+            var _p2 = A2($Json$Decode.decodeString,keyDecoder,_p1._0._0);
+            if (_p2.ctor === "Ok") {
+                  return A2($Json$Decode.andThen,
+                  A2(decodeDictFromTuples,keyDecoder,_p1._1),
+                  function (_p3) {
+                     return $Json$Decode.succeed(A3($Dict.insert,_p2._0,_p1._0._1,_p3));
+                  });
+               } else {
+                  return $Json$Decode.fail(_p2._0);
+               }
+         }
+   });
+   var dict2 = F2(function (keyDecoder,valueDecoder) {
+      return A2($Json$Decode.andThen,$Json$Decode.dict(valueDecoder),function (_p4) {    return A2(decodeDictFromTuples,keyDecoder,$Dict.toList(_p4));});
+   });
+   var set = function (decoder) {
+      return A2($Json$Decode.andThen,$Json$Decode.list(decoder),function (_p5) {    return $Json$Decode.succeed($Set.fromList(_p5));});
+   };
+   var date = A2($Json$Decode.customDecoder,$Json$Decode.string,$Date.fromString);
+   var apply = F2(function (f,aDecoder) {    return A2($Json$Decode.andThen,f,function (f$) {    return A2($Json$Decode.map,f$,aDecoder);});});
+   _op["|:"] = apply;
+   return _elm.Json.Decode.Extra.values = {_op: _op,date: date,apply: apply,set: set,dict2: dict2,withDefault: withDefault,maybeNull: maybeNull,lazy: lazy};
+};
+Elm.List = Elm.List || {};
+Elm.List.Extra = Elm.List.Extra || {};
+Elm.List.Extra.make = function (_elm) {
+   "use strict";
+   _elm.List = _elm.List || {};
+   _elm.List.Extra = _elm.List.Extra || {};
+   if (_elm.List.Extra.values) return _elm.List.Extra.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Set = Elm.Set.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var zip5 = $List.map5(F5(function (v0,v1,v2,v3,v4) {    return {ctor: "_Tuple5",_0: v0,_1: v1,_2: v2,_3: v3,_4: v4};}));
+   var zip4 = $List.map4(F4(function (v0,v1,v2,v3) {    return {ctor: "_Tuple4",_0: v0,_1: v1,_2: v2,_3: v3};}));
+   var zip3 = $List.map3(F3(function (v0,v1,v2) {    return {ctor: "_Tuple3",_0: v0,_1: v1,_2: v2};}));
+   var zip = $List.map2(F2(function (v0,v1) {    return {ctor: "_Tuple2",_0: v0,_1: v1};}));
+   var isPrefixOf = function (prefix) {
+      return function (_p0) {
+         return A2($List.all,$Basics.identity,A3($List.map2,F2(function (x,y) {    return _U.eq(x,y);}),prefix,_p0));
+      };
+   };
+   var isSuffixOf = F2(function (suffix,xs) {    return A2(isPrefixOf,$List.reverse(suffix),$List.reverse(xs));});
+   var selectSplit = function (xs) {
+      var _p1 = xs;
+      if (_p1.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            var _p5 = _p1._1;
+            var _p4 = _p1._0;
+            return A2($List._op["::"],
+            {ctor: "_Tuple3",_0: _U.list([]),_1: _p4,_2: _p5},
+            A2($List.map,
+            function (_p2) {
+               var _p3 = _p2;
+               return {ctor: "_Tuple3",_0: A2($List._op["::"],_p4,_p3._0),_1: _p3._1,_2: _p3._2};
+            },
+            selectSplit(_p5)));
+         }
+   };
+   var select = function (xs) {
+      var _p6 = xs;
+      if (_p6.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            var _p10 = _p6._1;
+            var _p9 = _p6._0;
+            return A2($List._op["::"],
+            {ctor: "_Tuple2",_0: _p9,_1: _p10},
+            A2($List.map,function (_p7) {    var _p8 = _p7;return {ctor: "_Tuple2",_0: _p8._0,_1: A2($List._op["::"],_p9,_p8._1)};},select(_p10)));
+         }
+   };
+   var tailsHelp = F2(function (e,list) {
+      var _p11 = list;
+      if (_p11.ctor === "::") {
+            var _p12 = _p11._0;
+            return A2($List._op["::"],A2($List._op["::"],e,_p12),A2($List._op["::"],_p12,_p11._1));
+         } else {
+            return _U.list([]);
+         }
+   });
+   var tails = A2($List.foldr,tailsHelp,_U.list([_U.list([])]));
+   var isInfixOf = F2(function (infix,xs) {    return A2($List.any,isPrefixOf(infix),tails(xs));});
+   var inits = A2($List.foldr,
+   F2(function (e,acc) {    return A2($List._op["::"],_U.list([]),A2($List.map,F2(function (x,y) {    return A2($List._op["::"],x,y);})(e),acc));}),
+   _U.list([_U.list([])]));
+   var groupByTransitive = F2(function (cmp,xs$) {
+      var _p13 = xs$;
+      if (_p13.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            if (_p13._1.ctor === "[]") {
+                  return _U.list([_U.list([_p13._0])]);
+               } else {
+                  var _p15 = _p13._0;
+                  var _p14 = A2(groupByTransitive,cmp,_p13._1);
+                  if (_p14.ctor === "::") {
+                        return A2(cmp,_p15,_p13._1._0) ? A2($List._op["::"],A2($List._op["::"],_p15,_p14._0),_p14._1) : A2($List._op["::"],
+                        _U.list([_p15]),
+                        _p14);
+                     } else {
+                        return _U.list([]);
+                     }
+               }
+         }
+   });
+   var stripPrefix = F2(function (prefix,xs) {
+      var step = F2(function (e,m) {
+         var _p16 = m;
+         if (_p16.ctor === "Nothing") {
+               return $Maybe.Nothing;
+            } else {
+               if (_p16._0.ctor === "[]") {
+                     return $Maybe.Nothing;
+                  } else {
+                     return _U.eq(e,_p16._0._0) ? $Maybe.Just(_p16._0._1) : $Maybe.Nothing;
+                  }
+            }
+      });
+      return A3($List.foldl,step,$Maybe.Just(xs),prefix);
+   });
+   var dropWhileEnd = function (p) {
+      return A2($List.foldr,F2(function (x,xs) {    return p(x) && $List.isEmpty(xs) ? _U.list([]) : A2($List._op["::"],x,xs);}),_U.list([]));
+   };
+   var takeWhileEnd = function (p) {
+      var step = F2(function (x,_p17) {
+         var _p18 = _p17;
+         var _p19 = _p18._0;
+         return p(x) && _p18._1 ? {ctor: "_Tuple2",_0: A2($List._op["::"],x,_p19),_1: true} : {ctor: "_Tuple2",_0: _p19,_1: false};
+      });
+      return function (_p20) {
+         return $Basics.fst(A3($List.foldr,step,{ctor: "_Tuple2",_0: _U.list([]),_1: true},_p20));
+      };
+   };
+   var splitAt = F2(function (n,xs) {    return {ctor: "_Tuple2",_0: A2($List.take,n,xs),_1: A2($List.drop,n,xs)};});
+   var unfoldr = F2(function (f,seed) {
+      var _p21 = f(seed);
+      if (_p21.ctor === "Nothing") {
+            return _U.list([]);
+         } else {
+            return A2($List._op["::"],_p21._0._0,A2(unfoldr,f,_p21._0._1));
+         }
+   });
+   var scanr1 = F2(function (f,xs$) {
+      var _p22 = xs$;
+      if (_p22.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            if (_p22._1.ctor === "[]") {
+                  return _U.list([_p22._0]);
+               } else {
+                  var _p23 = A2(scanr1,f,_p22._1);
+                  if (_p23.ctor === "::") {
+                        return A2($List._op["::"],A2(f,_p22._0,_p23._0),_p23);
+                     } else {
+                        return _U.list([]);
+                     }
+               }
+         }
+   });
+   var scanr = F3(function (f,acc,xs$) {
+      var _p24 = xs$;
+      if (_p24.ctor === "[]") {
+            return _U.list([acc]);
+         } else {
+            var _p25 = A3(scanr,f,acc,_p24._1);
+            if (_p25.ctor === "::") {
+                  return A2($List._op["::"],A2(f,_p24._0,_p25._0),_p25);
+               } else {
+                  return _U.list([]);
+               }
+         }
+   });
+   var scanl1 = F2(function (f,xs$) {
+      var _p26 = xs$;
+      if (_p26.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            return A3($List.scanl,f,_p26._0,_p26._1);
+         }
+   });
+   var foldr1 = F2(function (f,xs) {
+      var mf = F2(function (x,m) {
+         return $Maybe.Just(function () {    var _p27 = m;if (_p27.ctor === "Nothing") {    return x;} else {    return A2(f,x,_p27._0);}}());
+      });
+      return A3($List.foldr,mf,$Maybe.Nothing,xs);
+   });
+   var foldl1 = F2(function (f,xs) {
+      var mf = F2(function (x,m) {
+         return $Maybe.Just(function () {    var _p28 = m;if (_p28.ctor === "Nothing") {    return x;} else {    return A2(f,_p28._0,x);}}());
+      });
+      return A3($List.foldl,mf,$Maybe.Nothing,xs);
+   });
+   var uniqueHelp = F2(function (existing,remaining) {
+      uniqueHelp: while (true) {
+         var _p29 = remaining;
+         if (_p29.ctor === "[]") {
+               return _U.list([]);
+            } else {
+               var _p31 = _p29._1;
+               var _p30 = _p29._0;
+               if (A2($Set.member,_p30,existing)) {
+                     var _v18 = existing,_v19 = _p31;
+                     existing = _v18;
+                     remaining = _v19;
+                     continue uniqueHelp;
+                  } else return A2($List._op["::"],_p30,A2(uniqueHelp,A2($Set.insert,_p30,existing),_p31));
+            }
+      }
+   });
+   var unique = function (list) {    return A2(uniqueHelp,$Set.empty,list);};
+   var interweaveHelp = F3(function (l1,l2,acc) {
+      interweaveHelp: while (true) {
+         var _p32 = {ctor: "_Tuple2",_0: l1,_1: l2};
+         _v20_1: do {
+            if (_p32._0.ctor === "::") {
+                  if (_p32._1.ctor === "::") {
+                        var _v21 = _p32._0._1,_v22 = _p32._1._1,_v23 = A2($Basics._op["++"],acc,_U.list([_p32._0._0,_p32._1._0]));
+                        l1 = _v21;
+                        l2 = _v22;
+                        acc = _v23;
+                        continue interweaveHelp;
+                     } else {
+                        break _v20_1;
+                     }
+               } else {
+                  if (_p32._1.ctor === "[]") {
+                        break _v20_1;
+                     } else {
+                        return A2($Basics._op["++"],acc,_p32._1);
+                     }
+               }
+         } while (false);
+         return A2($Basics._op["++"],acc,_p32._0);
+      }
+   });
+   var interweave = F2(function (l1,l2) {    return A3(interweaveHelp,l1,l2,_U.list([]));});
+   var permutations = function (xs$) {
+      var _p33 = xs$;
+      if (_p33.ctor === "[]") {
+            return _U.list([_U.list([])]);
+         } else {
+            var f = function (_p34) {
+               var _p35 = _p34;
+               return A2($List.map,F2(function (x,y) {    return A2($List._op["::"],x,y);})(_p35._0),permutations(_p35._1));
+            };
+            return A2($List.concatMap,f,select(_p33));
+         }
+   };
+   var isPermutationOf = F2(function (permut,xs) {    return A2($List.member,permut,permutations(xs));});
+   var subsequencesNonEmpty = function (xs) {
+      var _p36 = xs;
+      if (_p36.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            var _p37 = _p36._0;
+            var f = F2(function (ys,r) {    return A2($List._op["::"],ys,A2($List._op["::"],A2($List._op["::"],_p37,ys),r));});
+            return A2($List._op["::"],_U.list([_p37]),A3($List.foldr,f,_U.list([]),subsequencesNonEmpty(_p36._1)));
+         }
+   };
+   var subsequences = function (xs) {    return A2($List._op["::"],_U.list([]),subsequencesNonEmpty(xs));};
+   var isSubsequenceOf = F2(function (subseq,xs) {    return A2($List.member,subseq,subsequences(xs));});
+   var transpose = function (ll) {
+      transpose: while (true) {
+         var _p38 = ll;
+         if (_p38.ctor === "[]") {
+               return _U.list([]);
+            } else {
+               if (_p38._0.ctor === "[]") {
+                     var _v28 = _p38._1;
+                     ll = _v28;
+                     continue transpose;
+                  } else {
+                     var _p39 = _p38._1;
+                     var tails = A2($List.filterMap,$List.tail,_p39);
+                     var heads = A2($List.filterMap,$List.head,_p39);
+                     return A2($List._op["::"],A2($List._op["::"],_p38._0._0,heads),transpose(A2($List._op["::"],_p38._0._1,tails)));
+                  }
+            }
+      }
+   };
+   var intercalate = function (xs) {    return function (_p40) {    return $List.concat(A2($List.intersperse,xs,_p40));};};
+   var removeWhen = F2(function (pred,list) {    return A2($List.filter,function (_p41) {    return $Basics.not(pred(_p41));},list);});
+   var singleton = function (x) {    return _U.list([x]);};
+   var replaceIf = F3(function (predicate,replacement,list) {
+      return A2($List.map,function (item) {    return predicate(item) ? replacement : item;},list);
+   });
+   var findIndices = function (p) {
+      return function (_p42) {
+         return A2($List.map,
+         $Basics.fst,
+         A2($List.filter,
+         function (_p43) {
+            var _p44 = _p43;
+            return p(_p44._1);
+         },
+         A2($List.indexedMap,F2(function (v0,v1) {    return {ctor: "_Tuple2",_0: v0,_1: v1};}),_p42)));
+      };
+   };
+   var findIndex = function (p) {    return function (_p45) {    return $List.head(A2(findIndices,p,_p45));};};
+   var elemIndices = function (x) {    return findIndices(F2(function (x,y) {    return _U.eq(x,y);})(x));};
+   var elemIndex = function (x) {    return findIndex(F2(function (x,y) {    return _U.eq(x,y);})(x));};
+   var find = F2(function (predicate,list) {
+      find: while (true) {
+         var _p46 = list;
+         if (_p46.ctor === "[]") {
+               return $Maybe.Nothing;
+            } else {
+               var _p47 = _p46._0;
+               if (predicate(_p47)) return $Maybe.Just(_p47); else {
+                     var _v31 = predicate,_v32 = _p46._1;
+                     predicate = _v31;
+                     list = _v32;
+                     continue find;
+                  }
+            }
+      }
+   });
+   var notMember = function (x) {    return function (_p48) {    return $Basics.not(A2($List.member,x,_p48));};};
+   var andThen = $Basics.flip($List.concatMap);
+   var lift2 = F3(function (f,la,lb) {    return A2(andThen,la,function (a) {    return A2(andThen,lb,function (b) {    return _U.list([A2(f,a,b)]);});});});
+   var lift3 = F4(function (f,la,lb,lc) {
+      return A2(andThen,
+      la,
+      function (a) {
+         return A2(andThen,lb,function (b) {    return A2(andThen,lc,function (c) {    return _U.list([A3(f,a,b,c)]);});});
+      });
+   });
+   var lift4 = F5(function (f,la,lb,lc,ld) {
+      return A2(andThen,
+      la,
+      function (a) {
+         return A2(andThen,
+         lb,
+         function (b) {
+            return A2(andThen,lc,function (c) {    return A2(andThen,ld,function (d) {    return _U.list([A4(f,a,b,c,d)]);});});
+         });
+      });
+   });
+   var andMap = F2(function (fl,l) {    return A3($List.map2,F2(function (x,y) {    return x(y);}),fl,l);});
+   var dropDuplicates = function (list) {
+      var step = F2(function (next,_p49) {
+         var _p50 = _p49;
+         var _p52 = _p50._0;
+         var _p51 = _p50._1;
+         return A2($Set.member,next,_p52) ? {ctor: "_Tuple2",_0: _p52,_1: _p51} : {ctor: "_Tuple2"
+                                                                                  ,_0: A2($Set.insert,next,_p52)
+                                                                                  ,_1: A2($List._op["::"],next,_p51)};
+      });
+      return $List.reverse($Basics.snd(A3($List.foldl,step,{ctor: "_Tuple2",_0: $Set.empty,_1: _U.list([])},list)));
+   };
+   var dropWhile = F2(function (predicate,list) {
+      dropWhile: while (true) {
+         var _p53 = list;
+         if (_p53.ctor === "[]") {
+               return _U.list([]);
+            } else {
+               if (predicate(_p53._0)) {
+                     var _v35 = predicate,_v36 = _p53._1;
+                     predicate = _v35;
+                     list = _v36;
+                     continue dropWhile;
+                  } else return list;
+            }
+      }
+   });
+   var takeWhile = F2(function (predicate,list) {
+      var _p54 = list;
+      if (_p54.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            var _p55 = _p54._0;
+            return predicate(_p55) ? A2($List._op["::"],_p55,A2(takeWhile,predicate,_p54._1)) : _U.list([]);
+         }
+   });
+   var span = F2(function (p,xs) {    return {ctor: "_Tuple2",_0: A2(takeWhile,p,xs),_1: A2(dropWhile,p,xs)};});
+   var $break = function (p) {    return span(function (_p56) {    return $Basics.not(p(_p56));});};
+   var groupBy = F2(function (eq,xs$) {
+      var _p57 = xs$;
+      if (_p57.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            var _p59 = _p57._0;
+            var _p58 = A2(span,eq(_p59),_p57._1);
+            var ys = _p58._0;
+            var zs = _p58._1;
+            return A2($List._op["::"],A2($List._op["::"],_p59,ys),A2(groupBy,eq,zs));
+         }
+   });
+   var group = groupBy(F2(function (x,y) {    return _U.eq(x,y);}));
+   var minimumBy = F2(function (f,ls) {
+      var minBy = F2(function (x,_p60) {
+         var _p61 = _p60;
+         var _p62 = _p61._1;
+         var fx = f(x);
+         return _U.cmp(fx,_p62) < 0 ? {ctor: "_Tuple2",_0: x,_1: fx} : {ctor: "_Tuple2",_0: _p61._0,_1: _p62};
+      });
+      var _p63 = ls;
+      if (_p63.ctor === "::") {
+            if (_p63._1.ctor === "[]") {
+                  return $Maybe.Just(_p63._0);
+               } else {
+                  var _p64 = _p63._0;
+                  return $Maybe.Just($Basics.fst(A3($List.foldl,minBy,{ctor: "_Tuple2",_0: _p64,_1: f(_p64)},_p63._1)));
+               }
+         } else {
+            return $Maybe.Nothing;
+         }
+   });
+   var maximumBy = F2(function (f,ls) {
+      var maxBy = F2(function (x,_p65) {
+         var _p66 = _p65;
+         var _p67 = _p66._1;
+         var fx = f(x);
+         return _U.cmp(fx,_p67) > 0 ? {ctor: "_Tuple2",_0: x,_1: fx} : {ctor: "_Tuple2",_0: _p66._0,_1: _p67};
+      });
+      var _p68 = ls;
+      if (_p68.ctor === "::") {
+            if (_p68._1.ctor === "[]") {
+                  return $Maybe.Just(_p68._0);
+               } else {
+                  var _p69 = _p68._0;
+                  return $Maybe.Just($Basics.fst(A3($List.foldl,maxBy,{ctor: "_Tuple2",_0: _p69,_1: f(_p69)},_p68._1)));
+               }
+         } else {
+            return $Maybe.Nothing;
+         }
+   });
+   var uncons = function (xs) {
+      var _p70 = xs;
+      if (_p70.ctor === "[]") {
+            return $Maybe.Nothing;
+         } else {
+            return $Maybe.Just({ctor: "_Tuple2",_0: _p70._0,_1: _p70._1});
+         }
+   };
+   var iterate = F2(function (f,x) {
+      var _p71 = f(x);
+      if (_p71.ctor === "Just") {
+            return A2($List._op["::"],x,A2(iterate,f,_p71._0));
+         } else {
+            return _U.list([x]);
+         }
+   });
+   var getAt = F2(function (xs,idx) {    return $List.head(A2($List.drop,idx,xs));});
+   _op["!!"] = getAt;
+   var init = function () {
+      var maybe = F2(function (d,f) {    return function (_p72) {    return A2($Maybe.withDefault,d,A2($Maybe.map,f,_p72));};});
+      return A2($List.foldr,
+      function (_p73) {
+         return A2(F2(function (x,y) {    return function (_p74) {    return x(y(_p74));};}),
+         $Maybe.Just,
+         A2(maybe,_U.list([]),F2(function (x,y) {    return A2($List._op["::"],x,y);})(_p73)));
+      },
+      $Maybe.Nothing);
+   }();
+   var last = foldl1($Basics.flip($Basics.always));
+   return _elm.List.Extra.values = {_op: _op
+                                   ,last: last
+                                   ,init: init
+                                   ,getAt: getAt
+                                   ,uncons: uncons
+                                   ,minimumBy: minimumBy
+                                   ,maximumBy: maximumBy
+                                   ,andMap: andMap
+                                   ,andThen: andThen
+                                   ,takeWhile: takeWhile
+                                   ,dropWhile: dropWhile
+                                   ,dropDuplicates: dropDuplicates
+                                   ,replaceIf: replaceIf
+                                   ,singleton: singleton
+                                   ,removeWhen: removeWhen
+                                   ,iterate: iterate
+                                   ,intercalate: intercalate
+                                   ,transpose: transpose
+                                   ,subsequences: subsequences
+                                   ,permutations: permutations
+                                   ,interweave: interweave
+                                   ,unique: unique
+                                   ,foldl1: foldl1
+                                   ,foldr1: foldr1
+                                   ,scanl1: scanl1
+                                   ,scanr: scanr
+                                   ,scanr1: scanr1
+                                   ,unfoldr: unfoldr
+                                   ,splitAt: splitAt
+                                   ,takeWhileEnd: takeWhileEnd
+                                   ,dropWhileEnd: dropWhileEnd
+                                   ,span: span
+                                   ,$break: $break
+                                   ,stripPrefix: stripPrefix
+                                   ,group: group
+                                   ,groupBy: groupBy
+                                   ,groupByTransitive: groupByTransitive
+                                   ,inits: inits
+                                   ,tails: tails
+                                   ,select: select
+                                   ,selectSplit: selectSplit
+                                   ,isPrefixOf: isPrefixOf
+                                   ,isSuffixOf: isSuffixOf
+                                   ,isInfixOf: isInfixOf
+                                   ,isSubsequenceOf: isSubsequenceOf
+                                   ,isPermutationOf: isPermutationOf
+                                   ,notMember: notMember
+                                   ,find: find
+                                   ,elemIndex: elemIndex
+                                   ,elemIndices: elemIndices
+                                   ,findIndex: findIndex
+                                   ,findIndices: findIndices
+                                   ,zip: zip
+                                   ,zip3: zip3
+                                   ,zip4: zip4
+                                   ,zip5: zip5
+                                   ,lift2: lift2
+                                   ,lift3: lift3
+                                   ,lift4: lift4};
+};
+Elm.Maybe = Elm.Maybe || {};
+Elm.Maybe.Extra = Elm.Maybe.Extra || {};
+Elm.Maybe.Extra.make = function (_elm) {
+   "use strict";
+   _elm.Maybe = _elm.Maybe || {};
+   _elm.Maybe.Extra = _elm.Maybe.Extra || {};
+   if (_elm.Maybe.Extra.values) return _elm.Maybe.Extra.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Array = Elm.Array.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var traverseArray = function (f) {
+      var step = F2(function (e,acc) {
+         var _p0 = f(e);
+         if (_p0.ctor === "Nothing") {
+               return $Maybe.Nothing;
+            } else {
+               return A2($Maybe.map,$Array.push(_p0._0),acc);
+            }
+      });
+      return A2($Array.foldl,step,$Maybe.Just($Array.empty));
+   };
+   var combineArray = traverseArray($Basics.identity);
+   var traverse = function (f) {
+      var step = F2(function (e,acc) {
+         var _p1 = f(e);
+         if (_p1.ctor === "Nothing") {
+               return $Maybe.Nothing;
+            } else {
+               return A2($Maybe.map,F2(function (x,y) {    return A2($List._op["::"],x,y);})(_p1._0),acc);
+            }
+      });
+      return A2($List.foldr,step,$Maybe.Just(_U.list([])));
+   };
+   var combine = traverse($Basics.identity);
+   var maybeToArray = function (m) {    var _p2 = m;if (_p2.ctor === "Nothing") {    return $Array.empty;} else {    return A2($Array.repeat,1,_p2._0);}};
+   var maybeToList = function (m) {    var _p3 = m;if (_p3.ctor === "Nothing") {    return _U.list([]);} else {    return _U.list([_p3._0]);}};
+   var or = F2(function (ma,mb) {    var _p4 = ma;if (_p4.ctor === "Nothing") {    return mb;} else {    return ma;}});
+   var andMap = F2(function (f,x) {
+      return A2($Maybe.andThen,x,function (x$) {    return A2($Maybe.andThen,f,function (f$) {    return $Maybe.Just(f$(x$));});});
+   });
+   var map5 = F6(function (f,a,b,c,d,e) {    return A2(andMap,A2(andMap,A2(andMap,A2(andMap,A2($Maybe.map,f,a),b),c),d),e);});
+   var map4 = F5(function (f,a,b,c,d) {    return A2(andMap,A2(andMap,A2(andMap,A2($Maybe.map,f,a),b),c),d);});
+   var map3 = F4(function (f,a,b,c) {    return A2(andMap,A2(andMap,A2($Maybe.map,f,a),b),c);});
+   var map2 = F3(function (f,a,b) {    return A2(andMap,A2($Maybe.map,f,a),b);});
+   var next = map2($Basics.flip($Basics.always));
+   var prev = map2($Basics.always);
+   var mapDefault = F3(function (d,f,m) {    return A2($Maybe.withDefault,d,A2($Maybe.map,f,m));});
+   var isJust = function (m) {    var _p5 = m;if (_p5.ctor === "Nothing") {    return false;} else {    return true;}};
+   var isNothing = function (m) {    var _p6 = m;if (_p6.ctor === "Nothing") {    return true;} else {    return false;}};
+   var join = function (mx) {    var _p7 = mx;if (_p7.ctor === "Just") {    return _p7._0;} else {    return $Maybe.Nothing;}};
+   _op["?"] = F2(function (mx,x) {    return A2($Maybe.withDefault,x,mx);});
+   return _elm.Maybe.Extra.values = {_op: _op
+                                    ,join: join
+                                    ,isNothing: isNothing
+                                    ,isJust: isJust
+                                    ,map2: map2
+                                    ,map3: map3
+                                    ,map4: map4
+                                    ,map5: map5
+                                    ,mapDefault: mapDefault
+                                    ,andMap: andMap
+                                    ,next: next
+                                    ,prev: prev
+                                    ,or: or
+                                    ,maybeToList: maybeToList
+                                    ,maybeToArray: maybeToArray
+                                    ,traverse: traverse
+                                    ,combine: combine
+                                    ,traverseArray: traverseArray
+                                    ,combineArray: combineArray};
 };
 Elm.Native.Effects = {};
 Elm.Native.Effects.make = function(localRuntime) {
@@ -10683,6 +11370,72 @@ Elm.Html.Attributes.make = function (_elm) {
                                         ,property: property
                                         ,attribute: attribute};
 };
+Elm.Html = Elm.Html || {};
+Elm.Html.Events = Elm.Html.Events || {};
+Elm.Html.Events.make = function (_elm) {
+   "use strict";
+   _elm.Html = _elm.Html || {};
+   _elm.Html.Events = _elm.Html.Events || {};
+   if (_elm.Html.Events.values) return _elm.Html.Events.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Html = Elm.Html.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm),
+   $VirtualDom = Elm.VirtualDom.make(_elm);
+   var _op = {};
+   var keyCode = A2($Json$Decode._op[":="],"keyCode",$Json$Decode.$int);
+   var targetChecked = A2($Json$Decode.at,_U.list(["target","checked"]),$Json$Decode.bool);
+   var targetValue = A2($Json$Decode.at,_U.list(["target","value"]),$Json$Decode.string);
+   var defaultOptions = $VirtualDom.defaultOptions;
+   var Options = F2(function (a,b) {    return {stopPropagation: a,preventDefault: b};});
+   var onWithOptions = $VirtualDom.onWithOptions;
+   var on = $VirtualDom.on;
+   var messageOn = F3(function (name,addr,msg) {    return A3(on,name,$Json$Decode.value,function (_p0) {    return A2($Signal.message,addr,msg);});});
+   var onClick = messageOn("click");
+   var onDoubleClick = messageOn("dblclick");
+   var onMouseMove = messageOn("mousemove");
+   var onMouseDown = messageOn("mousedown");
+   var onMouseUp = messageOn("mouseup");
+   var onMouseEnter = messageOn("mouseenter");
+   var onMouseLeave = messageOn("mouseleave");
+   var onMouseOver = messageOn("mouseover");
+   var onMouseOut = messageOn("mouseout");
+   var onBlur = messageOn("blur");
+   var onFocus = messageOn("focus");
+   var onSubmit = messageOn("submit");
+   var onKey = F3(function (name,addr,handler) {    return A3(on,name,keyCode,function (code) {    return A2($Signal.message,addr,handler(code));});});
+   var onKeyUp = onKey("keyup");
+   var onKeyDown = onKey("keydown");
+   var onKeyPress = onKey("keypress");
+   return _elm.Html.Events.values = {_op: _op
+                                    ,onBlur: onBlur
+                                    ,onFocus: onFocus
+                                    ,onSubmit: onSubmit
+                                    ,onKeyUp: onKeyUp
+                                    ,onKeyDown: onKeyDown
+                                    ,onKeyPress: onKeyPress
+                                    ,onClick: onClick
+                                    ,onDoubleClick: onDoubleClick
+                                    ,onMouseMove: onMouseMove
+                                    ,onMouseDown: onMouseDown
+                                    ,onMouseUp: onMouseUp
+                                    ,onMouseEnter: onMouseEnter
+                                    ,onMouseLeave: onMouseLeave
+                                    ,onMouseOver: onMouseOver
+                                    ,onMouseOut: onMouseOut
+                                    ,on: on
+                                    ,onWithOptions: onWithOptions
+                                    ,defaultOptions: defaultOptions
+                                    ,targetValue: targetValue
+                                    ,targetChecked: targetChecked
+                                    ,keyCode: keyCode
+                                    ,Options: Options};
+};
 Elm.Native.Http = {};
 Elm.Native.Http.make = function(localRuntime) {
 
@@ -11118,6 +11871,2487 @@ Elm.Bets.Types.make = function (_elm) {
                                    ,Out: Out
                                    ,TBD: TBD};
 };
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Round = Elm.Bets.Types.Round || {};
+Elm.Bets.Types.Round.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Round = _elm.Bets.Types.Round || {};
+   if (_elm.Bets.Types.Round.values) return _elm.Bets.Types.Round.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var nextRound = function (r) {
+      var _p0 = r;
+      switch (_p0.ctor)
+      {case "I": return $Maybe.Just($Bets$Types.II);
+         case "II": return $Maybe.Just($Bets$Types.III);
+         case "III": return $Maybe.Just($Bets$Types.IV);
+         case "IV": return $Maybe.Just($Bets$Types.V);
+         case "V": return $Maybe.Just($Bets$Types.VI);
+         default: return $Maybe.Nothing;}
+   };
+   var toRound = function (i) {
+      var _p1 = i;
+      switch (_p1)
+      {case 1: return $Bets$Types.I;
+         case 2: return $Bets$Types.II;
+         case 3: return $Bets$Types.III;
+         case 4: return $Bets$Types.IV;
+         case 5: return $Bets$Types.V;
+         default: return $Bets$Types.VI;}
+   };
+   var decode = A2($Json$Decode.map,toRound,$Json$Decode.$int);
+   var toInt = function (r) {
+      var _p2 = r;
+      switch (_p2.ctor)
+      {case "I": return 1;
+         case "II": return 2;
+         case "III": return 3;
+         case "IV": return 4;
+         case "V": return 5;
+         default: return 6;}
+   };
+   var isSameOrANextRound = F2(function (r1,r2) {    return _U.cmp(toInt(r1),toInt(r2)) > -1;});
+   var encode = function (r) {    return $Json$Encode.$int(toInt(r));};
+   return _elm.Bets.Types.Round.values = {_op: _op,toInt: toInt,nextRound: nextRound,isSameOrANextRound: isSameOrANextRound,encode: encode,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Team = Elm.Bets.Types.Team || {};
+Elm.Bets.Types.Team.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Team = _elm.Bets.Types.Team || {};
+   if (_elm.Bets.Types.Team.values) return _elm.Bets.Types.Team.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Html = Elm.Html.make(_elm),
+   $Html$Attributes = Elm.Html.Attributes.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Maybe$Extra = Elm.Maybe.Extra.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var england = {team: {teamID: "ENG",teamName: "Engeland"}
+                 ,players: _U.list(["Joe Hart"
+                                   ,"Fraser Forster"
+                                   ,"Tom Heaton"
+                                   ,"Nathaniel Clyne"
+                                   ,"Kyle Walker"
+                                   ,"Danny Rose"
+                                   ,"Ryan Bertrand"
+                                   ,"Chris Smalling"
+                                   ,"John Stones"
+                                   ,"Gary Cahill"
+                                   ,"Dele Alli"
+                                   ,"Ross Barkley"
+                                   ,"Fabian Delph"
+                                   ,"Danny Drinkwater"
+                                   ,"Eric Dier"
+                                   ,"Jordan Henderson"
+                                   ,"James Milner"
+                                   ,"Adam Lallana"
+                                   ,"Raheem Sterling"
+                                   ,"Jack Wilshere"
+                                   ,"Andros Townsend"
+                                   ,"Wayne Rooney"
+                                   ,"Harry Kane"
+                                   ,"Jamie Vardy"
+                                   ,"Marcus Rashford"
+                                   ,"Daniel Sturridge"])
+                 ,group: $Bets$Types.B};
+   var france = {team: {teamID: "FRA",teamName: "Frankrijk"}
+                ,players: _U.list(["Hugo Lloris"
+                                  ,"Steve Mandanda"
+                                  ,"Benoit Costil"
+                                  ,"Bacary Sagna"
+                                  ,"Christophe Jallet"
+                                  ,"Patrice Evra"
+                                  ,"Raphaël Varane"
+                                  ,"Laurent Koscielny"
+                                  ,"Eliaquim Mangala"
+                                  ,"Jérémy Mathieu"
+                                  ,"Lucas Digne"
+                                  ,"Lassana Diarra"
+                                  ,"N’Golo Kanté"
+                                  ,"Blaise Matuidi"
+                                  ,"Paul Pogba"
+                                  ,"Yohan Cabaye"
+                                  ,"Moussa Sissoko "
+                                  ,"Antoine Griezmann"
+                                  ,"André-Pierre Gignac"
+                                  ,"Anthony Martial"
+                                  ,"Dimitri Payet"
+                                  ,"Kingsley Coman"
+                                  ,"Olivier Giroud"])
+                ,group: $Bets$Types.A};
+   var encode = function (team) {
+      return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "teamID",_1: $Json$Encode.string(team.teamID)}
+                                         ,{ctor: "_Tuple2",_0: "teamName",_1: $Json$Encode.string(team.teamName)}]));
+   };
+   var encodeMaybe = function (mTeam) {    var _p0 = mTeam;if (_p0.ctor === "Just") {    return encode(_p0._0);} else {    return $Json$Encode.$null;}};
+   var decode = A3($Json$Decode.object2,
+   $Bets$Types.Team,
+   A2($Json$Decode._op[":="],"teamID",$Json$Decode.string),
+   A2($Json$Decode._op[":="],"teamName",$Json$Decode.string));
+   var isComplete = function (mTeam) {    return $Maybe$Extra.isJust(mTeam);};
+   var flagUri = function (size) {
+      return _U.cmp(size,5) > 0 || _U.cmp(size,0) < 0 ? "http://img.fifa.com/images/flags/3/" : A2($Basics._op["++"],
+      "http://img.fifa.com/images/flags/",
+      A2($Basics._op["++"],$Basics.toString(size),"/"));
+   };
+   var log = function (team) {    return team.teamName;};
+   var mdisplayFull = function (mteam) {    var _p1 = mteam;if (_p1.ctor === "Nothing") {    return "";} else {    return _p1._0.teamName;}};
+   var display = function (team) {    return team.teamID;};
+   var mdisplay = function (mteam) {    var _p2 = mteam;if (_p2.ctor === "Nothing") {    return "";} else {    return display(_p2._0);}};
+   var team = F2(function (teamID,teamName) {    return A2($Bets$Types.Team,teamID,teamName);});
+   var flag = function (mteam) {
+      var $default = A2(team,"xyz","");
+      var uri = function (team) {    return A2($Basics._op["++"],flagUri(2),A2($Basics._op["++"],team.teamID,".png"));};
+      var _p3 = mteam;
+      if (_p3.ctor === "Nothing") {
+            return A2($Html.img,_U.list([$Html$Attributes.src(uri($default))]),_U.list([]));
+         } else {
+            return A2($Html.img,_U.list([$Html$Attributes.src(uri(_p3._0))]),_U.list([]));
+         }
+   };
+   var romania = {team: A2(team,"ROU","Roemenië")
+                 ,players: _U.list(["Ciprian Tatarusanu"
+                                   ,"Costel Pantilimon"
+                                   ,"Silviu Lung"
+                                   ,"Cristian Sapunaru"
+                                   ,"Alexandru Matel"
+                                   ,"Vlad Chiriches"
+                                   ,"Valerica Gaman"
+                                   ,"Cosmin Moti"
+                                   ,"Dragos Grigore"
+                                   ,"Razvan Raţ"
+                                   ,"Steliano Filip"
+                                   ,"Alin Tosca"
+                                   ,"Mihai Pintilii"
+                                   ,"Ovidiu Hoban"
+                                   ,"Adrian Ropotan"
+                                   ,"Andrei Prepelita"
+                                   ,"Adrian Popa"
+                                   ,"Gabriel Torje"
+                                   ,"Alexandru Chipciu"
+                                   ,"Alexandru Maxim"
+                                   ,"Nicolae Stanciu"
+                                   ,"Lucian Sanmartean"
+                                   ,"Claudiu Keserü"
+                                   ,"Bogdan Stancu"
+                                   ,"Florin Andone"
+                                   ,"Denis Alibec"
+                                   ,"Ioan Hora"
+                                   ,"Andrei Ivan"])
+                 ,group: $Bets$Types.A};
+   var albania = {team: A2(team,"ALB","Albanië")
+                 ,players: _U.list(["Etrit Berisha"
+                                   ,"Alban Hoxha"
+                                   ,"Orges Shehi"
+                                   ,"Lorik Cana"
+                                   ,"Arlind Ajeti"
+                                   ,"Berat Gjimshiti"
+                                   ,"Mërgim Mavraj"
+                                   ,"Amir Rrahmani"
+                                   ,"Elseid Hysaj"
+                                   ,"Ansi Agolli"
+                                   ,"Frederic Veseli"
+                                   ,"Naser Aliji"
+                                   ,"Ledjan Memushaj"
+                                   ,"Ergys Kace"
+                                   ,"Andi Lila"
+                                   ,"Migjen Basha"
+                                   ,"Odise Roshi"
+                                   ,"Burim Kukeli"
+                                   ,"Ermir Lenjani"
+                                   ,"Herolind Shala"
+                                   ,"Taulant Xhaka"
+                                   ,"Armir Abrashi"
+                                   ,"Bekim Balaj"
+                                   ,"Sokol Cikalleshi"
+                                   ,"Armando Sadiku"
+                                   ,"Milot Rashica"
+                                   ,"Shkëlzen Gashi"])
+                 ,group: $Bets$Types.A};
+   var switzerland = {team: A2(team,"SUI","Zwitserland")
+                     ,players: _U.list(["Roman Bürki"
+                                       ,"Marwin Hitz"
+                                       ,"Yvon Mvongo"
+                                       ,"Yann Sommer"
+                                       ,"Johan Djourou"
+                                       ,"Nicol Elvedi"
+                                       ,"Michael Lang"
+                                       ,"Stephan Lichtsteiner"
+                                       ,"François Moubandje"
+                                       ,"Ricardo Rodriguez"
+                                       ,"Fabian Schär"
+                                       ,"Philippe Senderos"
+                                       ,"Steve Von Bergen"
+                                       ,"Silvan Widmer"
+                                       ,"Valon Behrami"
+                                       ,"Eeren Derdiyok"
+                                       ,"Blerim Dzemaili"
+                                       ,"Breel Embolo"
+                                       ,"Gelson Fernandes"
+                                       ,"Fabian Frei"
+                                       ,"Admir Mehmedi"
+                                       ,"Haris Seferovic"
+                                       ,"Xherdan Shaqiri"
+                                       ,"Renato Steffen"
+                                       ,"Shani Tarashaj"
+                                       ,"Granit Xhaka"
+                                       ,"Denis Zakaria"
+                                       ,"Luca Zuffi"])
+                     ,group: $Bets$Types.A};
+   var russia = {team: A2(team,"RUS","Rusland")
+                ,players: _U.list(["Igor Akinfeev"
+                                  ,"Guilherme"
+                                  ,"Yuri Lodygin"
+                                  ,"Alexei Berezutsky"
+                                  ,"Vasily Berezutsky"
+                                  ,"Sergei Ignashevich"
+                                  ,"Dmitry Kombarov"
+                                  ,"Roman Neustädter"
+                                  ,"Georgy Shchennikov"
+                                  ,"Roman Shishkin"
+                                  ,"Igor Smolnikov"
+                                  ,"Igor Denisov"
+                                  ,"Dmitri Torbinski"
+                                  ,"Denis Glushakov"
+                                  ,"Alexander Golovin"
+                                  ,"Oleg Ivanov"
+                                  ,"Pavel Mamaev"
+                                  ,"Alexander Samedov"
+                                  ,"Oleg Shatov"
+                                  ,"Roman Shirokov"
+                                  ,"Artyom Dzyuba"
+                                  ,"Alexander Kokorin"
+                                  ,"Fyodor Smolov"])
+                ,group: $Bets$Types.B};
+   var wales = {team: A2(team,"WAL","Wales")
+               ,players: _U.list(["Wayne Hennessey"
+                                 ,"Danny Ward"
+                                 ,"Owain Fon Williams"
+                                 ,"Ben Davies"
+                                 ,"Neil Taylor"
+                                 ,"Chris Gunter"
+                                 ,"Ashley Williams"
+                                 ,"James Chester"
+                                 ,"Ashley Richards"
+                                 ,"Paul Dummett"
+                                 ,"Adam Henley"
+                                 ,"Adam Matthews"
+                                 ,"James Collins"
+                                 ,"Aaron Ramsey"
+                                 ,"Joe Ledley"
+                                 ,"David Vaughan"
+                                 ,"Joe Allen"
+                                 ,"David Cotterill"
+                                 ,"Jonathan Williams"
+                                 ,"George Williams"
+                                 ,"Andy King"
+                                 ,"Emyr Huws"
+                                 ,"Dave Edwards (Wolverhampton Wanderers)."
+                                 ,"Hal Robson-Kanu"
+                                 ,"Sam Vokes"
+                                 ,"Tom Bradshaw"
+                                 ,"Tom Lawrence"
+                                 ,"Simon Church"
+                                 ,"Wes Burns"
+                                 ,"Gareth Bale"])
+               ,group: $Bets$Types.B};
+   var slovakia = {team: A2(team,"SVK","Slowakije")
+                  ,players: _U.list(["Matus Kozacik"
+                                    ,"Jan Mucha"
+                                    ,"Jan Novota"
+                                    ,"Peter Pekarik"
+                                    ,"Milan Skriniar"
+                                    ,"Martin Skrtel"
+                                    ,"Norbert Gyoember"
+                                    ,"Jan Durica"
+                                    ,"Kornel Salata"
+                                    ,"Tomas Hubocan"
+                                    ,"Dusan Svento"
+                                    ,"Lukas Tesak"
+                                    ,"Viktor Pecovsky"
+                                    ,"Matus Bero"
+                                    ,"Robert Mak"
+                                    ,"Erik Sabo"
+                                    ,"Juraj Kucka"
+                                    ,"Patrik Hrosovsky"
+                                    ,"Jan Gregus"
+                                    ,"Stanislav Sestak"
+                                    ,"Marek Hamsik"
+                                    ,"Ondrej Duda"
+                                    ,"Miroslav Stoch"
+                                    ,"Vladimir Weiss"
+                                    ,"Michal Duris"
+                                    ,"Adam Nemec"
+                                    ,"Adam Zrelak"])
+                  ,group: $Bets$Types.B};
+   var germany = {team: A2(team,"GER","Duitsland")
+                 ,players: _U.list(["Manuel Neuer"
+                                   ,"Bernd Leno"
+                                   ,"Marc-André Ter Stegen"
+                                   ,"Jérôme Boateng"
+                                   ,"Emre Can"
+                                   ,"Jonas Hector"
+                                   ,"Benedikt Höwedes"
+                                   ,"Mats Hummels"
+                                   ,"Shkodran Mustafi"
+                                   ,"Sebastian Rudy"
+                                   ,"Antonio Rüdiger"
+                                   ,"Julian Brandt"
+                                   ,"Julian Draxler"
+                                   ,"Mario Götze"
+                                   ,"Sami Khedira"
+                                   ,"Joshua Kimmich"
+                                   ,"Toni Kroos"
+                                   ,"Thomas Muller"
+                                   ,"Mesut Özil"
+                                   ,"Bastian Schweinsteiger"
+                                   ,"Julian Weigl"
+                                   ,"Karim Bellarabi"
+                                   ,"Mario Gomez"
+                                   ," Lukas Podolski"
+                                   ,"Marco Reus"
+                                   ,"Leroy Sané"
+                                   ,"André Schürrle"])
+                 ,group: $Bets$Types.C};
+   var ukraine = {team: A2(team,"UKR","Oekraïne")
+                 ,players: _U.list(["Andriy Pyatov"
+                                   ,"Denys Boyko"
+                                   ,"Mykyta Shevchenko"
+                                   ,"Vyacheslav Shevchuk"
+                                   ,"Yaroslav Rakitskyi"
+                                   ,"Oleksandr Kucher"
+                                   ,"Yevgen Khacheridi"
+                                   ,"Artem Fedetskyi"
+                                   ,"Mykyta Kamenyuka"
+                                   ,"Bogdan Butko"
+                                   ,"Anatoliy Tymoshchuk"
+                                   ,"Taras Stepanenko"
+                                   ,"Viktor Kovalenko"
+                                   ,"Maksym Malyshev"
+                                   ,"Ruslan Rotan Dnipro Dnipropetrovsk)"
+                                   ,"Yevhen Shakhov  Dnipro Dnipropetrovsk)"
+                                   ,"Yevhen Konoplyanka"
+                                   ,"Oleg Gusev"
+                                   ,"Sergiy Rybalka"
+                                   ,"Denys Garmash"
+                                   ,"Sergiy Sydorchuk"
+                                   ,"Andriy Yarmolenko"
+                                   ,"Oleksandr Karavayev"
+                                   ,"Ivan Petryak"
+                                   ,"Oleksandr Zinchenko"
+                                   ,"Roman Zozulya"
+                                   ,"Artem Kravets"
+                                   ,"Pylyp Budkivskyi"])
+                 ,group: $Bets$Types.C};
+   var poland = {team: A2(team,"POL","Polen")
+                ,players: _U.list(["Artur Boruc"
+                                  ,"Lukasz Fabianski"
+                                  ,"Wojciech Szczesny"
+                                  ,"Przemysław Tyton (VfB Stuttgart)."
+                                  ,"Thiago Cionek"
+                                  ,"Pavel Dawidowicz"
+                                  ,"Kamil Glik"
+                                  ,"Artur Jedrzejczyk"
+                                  ,"Michał Pazdan"
+                                  ,"Lukasz Piszczek"
+                                  ,"Maciej Rybus"
+                                  ,"Bartosz Salamon"
+                                  ,"Jakub Wawrzyniak (Lechia Gdansk)."
+                                  ,"Jakub Blaszczykowski"
+                                  ,"Kamil Grosicki"
+                                  ,"Tomasz Jodlowiec"
+                                  ,"Bartosz Kapustka"
+                                  ,"Grzegorz Krychowiak"
+                                  ,"Karol Linetty"
+                                  ,"Krzysztof Maczynski"
+                                  ,"Slawomir Peszko"
+                                  ,"Filip Starzynski"
+                                  ,"Pavel Wszolek"
+                                  ,"Piotr Zielinski"
+                                  ,"Robert Lewandowski"
+                                  ,"Arek Milik"
+                                  ,"Artur Sobiech"
+                                  ,"Mariusz Stepinski"])
+                ,group: $Bets$Types.C};
+   var northernIreland = {team: A2(team,"NIR","Noord-Ierland")
+                         ,players: _U.list(["Roy Carroll"
+                                           ,"Michael McGovern"
+                                           ,"Alan McManus"
+                                           ,"Craig Cathcart"
+                                           ,"Jonny Evans"
+                                           ,"Gareth McAuley"
+                                           ,"Luke McCullough"
+                                           ,"Conor McLaughlin"
+                                           ,"Aaron Hughes"
+                                           ,"Daniel Lafferty"
+                                           ,"Michael Smith"
+                                           ,"Lee Hodson"
+                                           ,"Chris Baird"
+                                           ,"Paddy McNair"
+                                           ,"Steven Davis"
+                                           ,"Oliver Norwood"
+                                           ,"Corry Evans"
+                                           ,"Jamie Ward"
+                                           ,"Stuart Dallas"
+                                           ,"Niall McGinn"
+                                           ,"Shane Ferguson"
+                                           ,"Ben Reeves"
+                                           ,"Will Grigg"
+                                           ,"Kyle Lafferty"
+                                           ,"Conor Washington"
+                                           ,"Billy McKay"
+                                           ,"Liam Boyce"
+                                           ,"Josh Magennis"])
+                         ,group: $Bets$Types.C};
+   var spain = {team: A2(team,"ESP","Spanje")
+               ,players: _U.list(["Iker Casillas"
+                                 ,"David De Gea"
+                                 ,"Sergio Rico"
+                                 ,"Sergio Ramos"
+                                 ,"Gerard Piqué"
+                                 ,"Dani Carvajal"
+                                 ,"Jordi Alba"
+                                 ,"Marc Bartra"
+                                 ,"Cesar Azpilicueta"
+                                 ,"Mikel San José"
+                                 ,"Juanfran"
+                                 ,"Bruno Soriano"
+                                 ,"Sergio Busquets"
+                                 ,"Koke"
+                                 ,"Thiago"
+                                 ,"Andrés Iniesta"
+                                 ,"Isco"
+                                 ,"David Silva"
+                                 ,"Pedro"
+                                 ,"Cesc Fabregas"
+                                 ,"Saúl"
+                                 ,"Aritz Aduriz"
+                                 ,"Nolito"
+                                 ,"Alvaro Morata"
+                                 ,"Lucas Vázquez"])
+               ,group: $Bets$Types.D};
+   var czechRepublic = {team: A2(team,"CZE","Tsjechië")
+                       ,players: _U.list(["Petr Cech"
+                                         ,"Tomas Vaclik"
+                                         ,"Tomas Koubek"
+                                         ,"Pavel Kaderabek"
+                                         ,"Theodor Gebre Selassie"
+                                         ,"Tomas Sivok"
+                                         ,"Michal Kadlec"
+                                         ,"Ondrej Zahustel"
+                                         ,"Roman Hubnik"
+                                         ,"David Limbersky"
+                                         ,"Daniel Pudil"
+                                         ,"Marek Suchy (FC Basel)."
+                                         ,"Vladimir Darida"
+                                         ,"Jaroslav Plasil"
+                                         ,"David Pavelka"
+                                         ,"Jiri Skalak"
+                                         ,"Ladislav Krejci"
+                                         ,"Borek Dockal"
+                                         ,"Tomas Rosicky"
+                                         ,"Daniel Kolar"
+                                         ,"Jan Kovarik"
+                                         ,"Lukas Marecek"
+                                         ,"Tomas Necid"
+                                         ,"Matej Vydra"
+                                         ,"David Lafata"
+                                         ,"Patrik Schick"
+                                         ,"Milan Skoda"])
+                       ,group: $Bets$Types.D};
+   var turkey = {team: A2(team,"TUR","Turkije")
+                ,players: _U.list(["Ali Sasal Vural"
+                                  ,"Harun Tekin"
+                                  ,"Onur Kivrak"
+                                  ,"Volkan Babacan"
+                                  ,"Gökhan Gönül"
+                                  ,"Şener Özbayrakli"
+                                  ,"Ahmet Çalik"
+                                  ,"Çaglar Söyüncü"
+                                  ,"Hakan Balta"
+                                  ,"Mehmet Topal"
+                                  ,"Semih Kaya"
+                                  ,"Serdar Aziz"
+                                  ,"Caner Erkin"
+                                  ,"İsmail Köybasi"
+                                  ,"Emre Mor"
+                                  ,"Gökhan Töre"
+                                  ,"Volkan Sen"
+                                  ,"Yasin Öztekin"
+                                  ,"Hakan Calhanogu"
+                                  ,"Mahmut Tekdemir"
+                                  ,"Nuri Sahin"
+                                  ,"Oguzhan Özyakup"
+                                  ,"Ozan Tufan"
+                                  ,"Selçuk İnan"
+                                  ,"Alper Potuk"
+                                  ,"Arda Turan"
+                                  ,"Olcay Şahan"
+                                  ,"Burak Yilmaz"
+                                  ,"Cenk Tosun"
+                                  ,"Mevlüt Erdinç"
+                                  ,"Yunus Malli"])
+                ,group: $Bets$Types.D};
+   var croatia = {team: A2(team,"CRO","Kroatië")
+                 ,players: _U.list(["Danijel Subasic"
+                                   ,"Lovre Kalinic"
+                                   ,"Ivan Vargic"
+                                   ,"Dominik Livakovic"
+                                   ,"Darijo Srna"
+                                   ,"Vedran Corluka"
+                                   ,"Domagoj Vida"
+                                   ,"Ivan Strinic"
+                                   ,"Gordon Schildenfeld"
+                                   ,"Sime Vrsaljko"
+                                   ,"Tin Jedvaj"
+                                   ,"Duje Caleta-Car"
+                                   ,"Luka Modric"
+                                   ,"Ivan Rakitic"
+                                   ,"Ivan Perisic"
+                                   ,"Mateo Kovacic"
+                                   ,"Milan Badelj"
+                                   ,"Marcelo Brozovic"
+                                   ,"Alen Halilovic"
+                                   ,"Domagoj Antolic"
+                                   ,"Marko Rog"
+                                   ,"Ante Coric"
+                                   ,"Mario Mandzukic"
+                                   ,"Nikola Kalinic"
+                                   ,"Andrej Kramaric"
+                                   ,"Marko Pjaca"
+                                   ,"Duje Cop"])
+                 ,group: $Bets$Types.D};
+   var belgium = {team: A2(team,"BEL","België")
+                 ,players: _U.list(["Thibaut Courtois"
+                                   ,"Simon Mignolet"
+                                   ,"Jean-François Gillet"
+                                   ,"Jan Vertonghen"
+                                   ,"Toby Alderweireld"
+                                   ,"Nicolas Lombaerts"
+                                   ,"Thomas Vermaelen"
+                                   ,"Jason Denayer"
+                                   ,"Jordan Lukaku"
+                                   ,"Björn Engels"
+                                   ,"Dedryck Boyata"
+                                   ,"Thomas Meunier"
+                                   ,"Kevin De Bruyne"
+                                   ,"Radja Nainggolan"
+                                   ,"Moussa Dembélé"
+                                   ,"Axel Witsel"
+                                   ,"Marouane Fellaini"
+                                   ,"Dries Mertens"
+                                   ,"Eden Hazard"
+                                   ,"Romelu Lukaku"
+                                   ,"Yannick Ferreira-Carrasco"
+                                   ,"Divock Origi"
+                                   ,"Michy Batshuayi"
+                                   ,"Christian Benteke"])
+                 ,group: $Bets$Types.E};
+   var italy = {team: A2(team,"ITA","Italië")
+               ,players: _U.list(["Gianluigi Buffon"
+                                 ,"Federico Marchetti"
+                                 ,"Salvatore Sirigu (Paris Saint Germain) "
+                                 ,"Davide Astori"
+                                 ,"Andrea Barzagli"
+                                 ,"Leonardo Bonucci"
+                                 ,"Giorgio Chiellini"
+                                 ,"Matteo Darmian"
+                                 ,"Mattia De Sciglio"
+                                 ,"Angelo Ogbonna"
+                                 ,"Daniele Rugani"
+                                 ,"Davide Zappacosta"
+                                 ,"Marco Benassi"
+                                 ,"Federico Bernardeschi"
+                                 ,"Giacomo Bonaventura"
+                                 ,"Antonio Candreva"
+                                 ,"Daniele De Rossi"
+                                 ,"Alessandro Florenzi"
+                                 ,"Emanuele Giaccherini"
+                                 ,"Jorge Luiz Jorginho"
+                                 ,"Riccardo Montolivo"
+                                 ,"Thiago Motta"
+                                 ,"Marco Parolo"
+                                 ,"Stefano Sturaro"
+                                 ,"Eder"
+                                 ,"Ciro Immobile"
+                                 ,"Stephan El Shaarawy"
+                                 ,"Lorenzo Insigne"
+                                 ,"Graziano Pellè"
+                                 ,"Simone Zaza"])
+               ,group: $Bets$Types.E};
+   var ireland = {team: A2(team,"IRL","Ierland")
+                 ,players: _U.list(["Shay Given"
+                                   ,"Darren Randolph"
+                                   ,"David Forde"
+                                   ,"Keiren Westwood"
+                                   ,"Seamus Coleman"
+                                   ,"Cyrus Christie"
+                                   ,"Paul McShane"
+                                   ,"Ciaran Clark"
+                                   ,"Richard Keogh"
+                                   ,"John O\'Shea"
+                                   ,"Alex Pearce"
+                                   ,"Shane Duffy"
+                                   ,"Marc Wilson"
+                                   ,"Stephen Ward"
+                                   ,"Aiden McGeady"
+                                   ,"James McClean"
+                                   ,"Glenn Whelan"
+                                   ,"James McCarthy"
+                                   ,"Jeff Hendrick"
+                                   ,"David Meyler"
+                                   ,"Stephen Quinn"
+                                   ,"Darron Gibson"
+                                   ,"Harry Arter"
+                                   ,"Wes Hoolahan"
+                                   ,"Eunan O\'Kane"
+                                   ,"Anthony Pilkington"
+                                   ,"Robbie Brady"
+                                   ,"Jonathan Walters"
+                                   ,"Jonathan Hayes"
+                                   ,"Callum O\'Dowda"
+                                   ,"Robbie Keane"
+                                   ,"Shane Long"
+                                   ,"David McGoldrick"
+                                   ,"Kevin Doyle"
+                                   ,"Daryl Murphy"])
+                 ,group: $Bets$Types.E};
+   var sweden = {team: A2(team,"SWE","Zweden")
+                ,players: _U.list(["Patrick Carlgren"
+                                  ,"Andreas Isaksson"
+                                  ,"Robin Olsen"
+                                  ,"Ludwig Augustinsson"
+                                  ,"Andreas Granqvist"
+                                  ,"Pontus Jansson"
+                                  ,"Erik Johansson"
+                                  ,"Mikael Lustig"
+                                  ,"Victor Lindelöf"
+                                  ,"Martin Olsson"
+                                  ,"Jimmy Durmaz"
+                                  ,"Albin Ekdal"
+                                  ,"Emil Forsberg"
+                                  ,"Oscar Hiljemark"
+                                  ,"Kim Källström"
+                                  ,"Sebastian Larsson"
+                                  ,"Oscar Lewicki"
+                                  ,"Pontus Wernbloom"
+                                  ,"Erkan Zengin"
+                                  ,"Marcus Berg"
+                                  ,"John Guidetti"
+                                  ,"Zlatan Ibrahimovic"
+                                  ,"Emir Kujovic"])
+                ,group: $Bets$Types.E};
+   var portugal = {team: A2(team,"POR","Portugal")
+                  ,players: _U.list(["Rui Patricio"
+                                    ,"Anthony Lopes"
+                                    ,"Eduardo"
+                                    ,"Vieirinha"
+                                    ,"Raphael Guerreiro"
+                                    ,"Cédric Soares"
+                                    ,"Eliseu"
+                                    ,"Bruno Alves"
+                                    ,"José Fonte"
+                                    ,"Ricardo Carvalho"
+                                    ,"Pepe"
+                                    ,"William Carvalho"
+                                    ,"Danilo Pereira"
+                                    ,"João Moutinho"
+                                    ,"Adrien Silva"
+                                    ,"João Mario"
+                                    ,"André Gomes"
+                                    ,"Renato Sanches"
+                                    ,"Cristiano Ronaldo"
+                                    ,"Eder"
+                                    ,"Nani"
+                                    ,"Ricardo Quaresma"
+                                    ,"Rafa Silva"])
+                  ,group: $Bets$Types.F};
+   var iceland = {team: A2(team,"ISL","IJsland")
+                 ,players: _U.list(["Hannes Halldorsson"
+                                   ,"Ögmundur Kristinsson"
+                                   ,"Ingvar Jonsson"
+                                   ,"Birkir Mar Saevarsson"
+                                   ,"Ragnar Sigurdsson"
+                                   ,"Kari Arnason"
+                                   ,"Ari Freyr Skulason"
+                                   ,"Haukur Heidar Hauksson"
+                                   ,"Sverrir Ingi Ingason"
+                                   ,"Hördur Björgvin Magnusson"
+                                   ,"Hjörtur Hermannsson"
+                                   ,"Aron Einar Gunnarsson"
+                                   ,"Emil Hallfredsson"
+                                   ,"Birkir Bjarnason"
+                                   ,"Johann Berg Gudmundsson"
+                                   ,"Gylfi Sigurdsson"
+                                   ,"Theodor Elmar Bjarnason"
+                                   ,"Runar Mar Sigurjonsson"
+                                   ,"Arnor Ingvi Traustason"
+                                   ,"Eidur Gudjohnsen"
+                                   ,"Kolbeinn Sigthorsson"
+                                   ,"Alfred Finnbogason"
+                                   ,"Jon Dadi Bödvarsson"])
+                 ,group: $Bets$Types.F};
+   var austria = {team: A2(team,"AUT","Oostenrijk")
+                 ,players: _U.list(["Robert Almer"
+                                   ,"Heinz Lindner"
+                                   ,"Ramazan Ozcan"
+                                   ,"Aleksandar Dragovic"
+                                   ,"Christian Fuchs"
+                                   ,"Gyorgy Garics"
+                                   ,"Martin Hinteregger"
+                                   ,"Florian Klein"
+                                   ,"Sebastian Prodl"
+                                   ,"Markus Suttner"
+                                   ,"Kevin Wimmer"
+                                   ,"David Alaba"
+                                   ,"Marko Arnautovic"
+                                   ,"Julian Baumgartlinger"
+                                   ,"Martin Harnik"
+                                   ,"Stefan Ilsanker"
+                                   ,"Jakob Jantscher"
+                                   ,"Zlatko Junuzovic"
+                                   ,"Marcel Sabitzer"
+                                   ,"Alessandro Schopf"
+                                   ,"Valentino Lazaro"
+                                   ,"Lukas Hinterseer"
+                                   ,"Rubin Okotie"
+                                   ,"Marc Janko"])
+                 ,group: $Bets$Types.F};
+   var hungary = {team: A2(team,"HUN","Hongarije")
+                 ,players: _U.list(["Gábor Király"
+                                   ,"Balázs Megyeri"
+                                   ,"Dénes Dibusz"
+                                   ,"Péter Gulácsi"
+                                   ,"Roland Juhász"
+                                   ,"Tamás Kádár"
+                                   ,"Mihály Korhut"
+                                   ,"Richárd Guzmics"
+                                   ,"Attila Fiola"
+                                   ,"Ádám Lang"
+                                   ,"Gergö Kocsis"
+                                   ,"Barnabás Bese"
+                                   ,"Zsolt Korcsmár"
+                                   ,"Gergö Lovrencsis"
+                                   ,"Máté Vida"
+                                   ,"Zoltán Gera"
+                                   ,"Balázs Dzsudzsák"
+                                   ,"Ákos Elek"
+                                   ,"Ádám Pintér"
+                                   ,"Zoltán Stieber"
+                                   ,"Ádám Gyurcsó"
+                                   ,"Ádám Nagy"
+                                   ,"László Keinheisler"
+                                   ,"Roland Sallai"
+                                   ,"Tamás Priskin"
+                                   ,"Ádám Szalai"
+                                   ,"Krisztián Németh"
+                                   ,"Nemanja Nikolic"
+                                   ,"Dániel Böde"
+                                   ,"Lászlo Lencse"])
+                 ,group: $Bets$Types.F};
+   var initTeamData = _U.list([france
+                              ,romania
+                              ,albania
+                              ,switzerland
+                              ,england
+                              ,russia
+                              ,wales
+                              ,slovakia
+                              ,germany
+                              ,ukraine
+                              ,poland
+                              ,northernIreland
+                              ,spain
+                              ,czechRepublic
+                              ,turkey
+                              ,croatia
+                              ,belgium
+                              ,italy
+                              ,ireland
+                              ,sweden
+                              ,portugal
+                              ,iceland
+                              ,austria
+                              ,hungary]);
+   return _elm.Bets.Types.Team.values = {_op: _op
+                                        ,team: team
+                                        ,display: display
+                                        ,mdisplay: mdisplay
+                                        ,mdisplayFull: mdisplayFull
+                                        ,log: log
+                                        ,flag: flag
+                                        ,initTeamData: initTeamData
+                                        ,isComplete: isComplete
+                                        ,decode: decode
+                                        ,encode: encode
+                                        ,encodeMaybe: encodeMaybe};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Draw = Elm.Bets.Types.Draw || {};
+Elm.Bets.Types.Draw.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Draw = _elm.Bets.Types.Draw || {};
+   if (_elm.Bets.Types.Draw.values) return _elm.Bets.Types.Draw.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Team = Elm.Bets.Types.Team.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var encode = function (_p0) {    var _p1 = _p0;return $Json$Encode.list(_U.list([$Json$Encode.string(_p1._0),$Bets$Types$Team.encodeMaybe(_p1._1)]));};
+   var isComplete = function (_p2) {    var _p3 = _p2;return $Bets$Types$Team.isComplete(_p3._1);};
+   var draw = F2(function (drawId,mTeam) {    return {ctor: "_Tuple2",_0: drawId,_1: mTeam};});
+   var decode = A3($Json$Decode.tuple2,draw,$Json$Decode.string,$Json$Decode.maybe($Bets$Types$Team.decode));
+   var team = function (_p4) {    var _p5 = _p4;return _p5._1;};
+   return _elm.Bets.Types.Draw.values = {_op: _op,team: team,isComplete: isComplete,encode: encode,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Date = Elm.Bets.Types.Date || {};
+Elm.Bets.Types.Date.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Date = _elm.Bets.Types.Date || {};
+   if (_elm.Bets.Types.Date.values) return _elm.Bets.Types.Date.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Date = Elm.Date.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var toDate = function (dateStr) {    return A2($Result.withDefault,$Date.fromTime(0),$Date.fromString(dateStr));};
+   var decode = A2($Json$Decode.map,$Date.fromTime,$Json$Decode.$float);
+   var encode = function (date) {    return $Json$Encode.$float($Date.toTime(date));};
+   return _elm.Bets.Types.Date.values = {_op: _op,toDate: toDate,encode: encode,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Stadium = Elm.Bets.Types.Stadium || {};
+Elm.Bets.Types.Stadium.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Stadium = _elm.Bets.Types.Stadium || {};
+   if (_elm.Bets.Types.Stadium.values) return _elm.Bets.Types.Stadium.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var encode = function (_p0) {
+      var _p1 = _p0;
+      return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "stadium",_1: $Json$Encode.string(_p1.stadium)}
+                                         ,{ctor: "_Tuple2",_0: "town",_1: $Json$Encode.string(_p1.town)}]));
+   };
+   var decode = A3($Json$Decode.object2,
+   $Bets$Types.Stadium,
+   A2($Json$Decode._op[":="],"stadium",$Json$Decode.string),
+   A2($Json$Decode._op[":="],"town",$Json$Decode.string));
+   return _elm.Bets.Types.Stadium.values = {_op: _op,decode: decode,encode: encode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Match = Elm.Bets.Types.Match || {};
+Elm.Bets.Types.Match.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Match = _elm.Bets.Types.Match || {};
+   if (_elm.Bets.Types.Match.values) return _elm.Bets.Types.Match.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Date = Elm.Bets.Types.Date.make(_elm),
+   $Bets$Types$Draw = Elm.Bets.Types.Draw.make(_elm),
+   $Bets$Types$Stadium = Elm.Bets.Types.Stadium.make(_elm),
+   $Date = Elm.Date.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var encode = function (_p0) {
+      var _p1 = _p0;
+      return $Json$Encode.list(_U.list([$Bets$Types$Draw.encode(_p1._0)
+                                       ,$Bets$Types$Draw.encode(_p1._1)
+                                       ,$Bets$Types$Date.encode(_p1._2)
+                                       ,$Bets$Types$Stadium.encode(_p1._3)]));
+   };
+   var unsetTeamMatch = F2(function (_p2,team) {
+      var _p3 = _p2;
+      var cleanDraw = function (_p4) {
+         var _p5 = _p4;
+         var _p7 = _p5;
+         var _p6 = _p5._1;
+         if (_p6.ctor === "Just") {
+               return _U.eq(team,_p6._0) ? {ctor: "_Tuple2",_0: _p5._0,_1: $Maybe.Nothing} : _p7;
+            } else {
+               return _p7;
+            }
+      };
+      var newHome = cleanDraw(_p3._0);
+      var newAway = cleanDraw(_p3._1);
+      return {ctor: "_Tuple4",_0: newHome,_1: newAway,_2: _p3._2,_3: _p3._3};
+   });
+   var setTeamMatch = F2(function (_p9,_p8) {
+      var _p10 = _p9;
+      var _p11 = _p8;
+      var _p14 = _p11._0;
+      var updateDraw = function (_p12) {    var _p13 = _p12;return _U.eq(_p13._0,_p14) ? {ctor: "_Tuple2",_0: _p14,_1: _p11._1} : _p13;};
+      var newHome = updateDraw(_p10._0);
+      var newAway = updateDraw(_p10._1);
+      return {ctor: "_Tuple4",_0: newHome,_1: newAway,_2: _p10._2,_3: _p10._3};
+   });
+   var teamsInMatch = function (_p15) {    var _p16 = _p15;return A2($List.filterMap,$Basics.identity,_U.list([_p16._0._1,_p16._1._1]));};
+   var isComplete = F2(function (m,mTeam) {
+      var _p17 = mTeam;
+      if (_p17.ctor === "Just") {
+            var teams = teamsInMatch(m);
+            return _U.eq($List.length(teams),2) && A2($List.member,_p17._0,teams);
+         } else {
+            return false;
+         }
+   });
+   var match = F4(function (home,away,date,stadium) {    return {ctor: "_Tuple4",_0: home,_1: away,_2: date,_3: stadium};});
+   var decode = A5($Json$Decode.tuple4,match,$Bets$Types$Draw.decode,$Bets$Types$Draw.decode,$Bets$Types$Date.decode,$Bets$Types$Stadium.decode);
+   var awayTeam = function (_p18) {    var _p19 = _p18;return $Bets$Types$Draw.team(_p19._1);};
+   var homeTeam = function (_p20) {    var _p21 = _p20;return $Bets$Types$Draw.team(_p21._0);};
+   return _elm.Bets.Types.Match.values = {_op: _op
+                                         ,homeTeam: homeTeam
+                                         ,awayTeam: awayTeam
+                                         ,teamsInMatch: teamsInMatch
+                                         ,setTeamMatch: setTeamMatch
+                                         ,unsetTeamMatch: unsetTeamMatch
+                                         ,isComplete: isComplete
+                                         ,encode: encode
+                                         ,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Bracket = Elm.Bets.Types.Bracket || {};
+Elm.Bets.Types.Bracket.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Bracket = _elm.Bets.Types.Bracket || {};
+   if (_elm.Bets.Types.Bracket.values) return _elm.Bets.Types.Bracket.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Round = Elm.Bets.Types.Round.make(_elm),
+   $Bets$Types$Team = Elm.Bets.Types.Team.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Decode$Extra = Elm.Json.Decode.Extra.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Maybe$Extra = Elm.Maybe.Extra.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var encodeHasQualified = function (hasQ) {    return $Json$Encode.string($Basics.toString(hasQ));};
+   var toHasQualified = function (hasQStr) {
+      var _p0 = hasQStr;
+      switch (_p0)
+      {case "TBD": return $Bets$Types.TBD;
+         case "In": return $Bets$Types.In;
+         case "Out": return $Bets$Types.Out;
+         default: return $Bets$Types.TBD;}
+   };
+   var decodeHasQualified = A2($Json$Decode.map,toHasQualified,$Json$Decode.string);
+   var toStringHasQualified = function (hasQ) {    var _p1 = hasQ;switch (_p1.ctor) {case "TBD": return "TBD";case "In": return "In";default: return "Out";}};
+   var decodeWinner = function (w) {
+      var stringToWinner = function (winner) {
+         var _p2 = winner;
+         switch (_p2)
+         {case "HomeTeam": return $Bets$Types.HomeTeam;
+            case "AwayTeam": return $Bets$Types.AwayTeam;
+            default: return $Bets$Types.None;}
+      };
+      var _p3 = w;
+      if (_p3.ctor === "Nothing") {
+            return $Json$Decode.succeed($Bets$Types.None);
+         } else {
+            return $Json$Decode.succeed(stringToWinner(_p3._0));
+         }
+   };
+   var decode = A2($Json$Decode.andThen,
+   A2($Json$Decode._op[":="],"node",$Json$Decode.string),
+   function (node) {
+      var _p4 = node;
+      switch (_p4)
+      {case "team": return A4($Json$Decode.object3,
+           $Bets$Types.TeamNode,
+           A2($Json$Decode._op[":="],"slot",$Json$Decode.string),
+           A2($Json$Decode._op[":="],"qualifier",$Json$Decode.maybe($Bets$Types$Team.decode)),
+           A2($Json$Decode._op[":="],"hasQualified",decodeHasQualified));
+         case "match": return A7($Json$Decode.object6,
+           $Bets$Types.MatchNode,
+           A2($Json$Decode._op[":="],"slot",$Json$Decode.string),
+           A2($Json$Decode.andThen,A2($Json$Decode._op[":="],"winner",$Json$Decode.maybe($Json$Decode.string)),decodeWinner),
+           A2($Json$Decode._op[":="],"home",$Json$Decode$Extra.lazy(function (_p5) {    return decode;})),
+           A2($Json$Decode._op[":="],"away",$Json$Decode$Extra.lazy(function (_p6) {    return decode;})),
+           A2($Json$Decode._op[":="],"round",$Bets$Types$Round.decode),
+           A2($Json$Decode._op[":="],"hasQualified",decodeHasQualified));
+         default: return $Json$Decode.fail(A2($Basics._op["++"],node," is not a recognized node for brackets"));}
+   });
+   var encodeWinner = function (winner) {
+      var _p7 = winner;
+      switch (_p7.ctor)
+      {case "HomeTeam": return $Json$Encode.string("HomeTeam");
+         case "AwayTeam": return $Json$Encode.string("AwayTeam");
+         default: return $Json$Encode.$null;}
+   };
+   var encode = function (bracket) {
+      var _p8 = bracket;
+      if (_p8.ctor === "TeamNode") {
+            return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "node",_1: $Json$Encode.string("team")}
+                                               ,{ctor: "_Tuple2",_0: "slot",_1: $Json$Encode.string(_p8._0)}
+                                               ,{ctor: "_Tuple2",_0: "qualifier",_1: $Bets$Types$Team.encodeMaybe(_p8._1)}
+                                               ,{ctor: "_Tuple2",_0: "hasQualified",_1: encodeHasQualified(_p8._2)}]));
+         } else {
+            return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "node",_1: $Json$Encode.string("match")}
+                                               ,{ctor: "_Tuple2",_0: "slot",_1: $Json$Encode.string(_p8._0)}
+                                               ,{ctor: "_Tuple2",_0: "winner",_1: encodeWinner(_p8._1)}
+                                               ,{ctor: "_Tuple2",_0: "home",_1: encode(_p8._2)}
+                                               ,{ctor: "_Tuple2",_0: "away",_1: encode(_p8._3)}
+                                               ,{ctor: "_Tuple2",_0: "round",_1: $Bets$Types$Round.encode(_p8._4)}
+                                               ,{ctor: "_Tuple2",_0: "hasQualified",_1: encodeHasQualified(_p8._5)}]));
+         }
+   };
+   var isComplete = function (brkt) {
+      var _p9 = brkt;
+      if (_p9.ctor === "TeamNode") {
+            return $Maybe$Extra.isJust(_p9._1);
+         } else {
+            var _p10 = _p9._1;
+            if (_p10.ctor === "None") {
+                  return false;
+               } else {
+                  return isComplete(_p9._2) && isComplete(_p9._3);
+               }
+         }
+   };
+   var get = F2(function (brkt,slot) {
+      var _p11 = brkt;
+      if (_p11.ctor === "MatchNode") {
+            return _U.eq(_p11._0,slot) ? $Maybe.Just(brkt) : $Maybe.oneOf(_U.list([A2(get,_p11._3,slot),A2(get,_p11._2,slot)]));
+         } else {
+            return _U.eq(_p11._0,slot) ? $Maybe.Just(brkt) : $Maybe.Nothing;
+         }
+   });
+   var qualifier = function (bracket) {
+      qualifier: while (true) {
+         var _p12 = bracket;
+         if (_p12.ctor === "MatchNode") {
+               var _p13 = _p12._1;
+               switch (_p13.ctor)
+               {case "HomeTeam": var _v12 = _p12._2;
+                    bracket = _v12;
+                    continue qualifier;
+                  case "AwayTeam": var _v13 = _p12._3;
+                    bracket = _v13;
+                    continue qualifier;
+                  default: return $Maybe.Nothing;}
+            } else {
+               return _p12._1;
+            }
+      }
+   };
+   var display = function (bracket) {    return $Bets$Types$Team.mdisplay(qualifier(bracket));};
+   var winner = function (bracket) {
+      winner: while (true) {
+         var _p14 = bracket;
+         if (_p14.ctor === "MatchNode") {
+               var _p15 = _p14._1;
+               switch (_p15.ctor)
+               {case "HomeTeam": var _v16 = _p14._2;
+                    bracket = _v16;
+                    continue winner;
+                  case "AwayTeam": var _v17 = _p14._3;
+                    bracket = _v17;
+                    continue winner;
+                  default: return $Maybe.Nothing;}
+            } else {
+               return _p14._1;
+            }
+      }
+   };
+   var reset = F2(function (newBracket,prevWinner) {
+      var _p16 = newBracket;
+      if (_p16.ctor === "MatchNode") {
+            var currentWinner = winner(newBracket);
+            var newWinner = _U.eq(currentWinner,prevWinner) ? _p16._1 : $Bets$Types.None;
+            return A6($Bets$Types.MatchNode,_p16._0,newWinner,_p16._2,_p16._3,_p16._4,_p16._5);
+         } else {
+            return A3($Bets$Types.TeamNode,_p16._0,_p16._1,_p16._2);
+         }
+   });
+   var proceed = F3(function (bracket,slot,wnnr) {
+      var _p17 = bracket;
+      if (_p17.ctor === "MatchNode") {
+            var _p22 = _p17._0;
+            var _p21 = _p17._4;
+            var _p20 = _p17._2;
+            var _p19 = _p17._5;
+            var _p18 = _p17._3;
+            if (_U.eq(_p22,slot)) return A6($Bets$Types.MatchNode,slot,wnnr,_p20,_p18,_p21,_p19); else {
+                  var currentWinner = winner(bracket);
+                  var newRight = A3(proceed,_p18,slot,wnnr);
+                  var newLeft = A3(proceed,_p20,slot,wnnr);
+                  var newBracket = A6($Bets$Types.MatchNode,_p22,_p17._1,newLeft,newRight,_p21,_p19);
+                  return A2(reset,newBracket,currentWinner);
+               }
+         } else {
+            return bracket;
+         }
+   });
+   var proceedHome = F2(function (bracket,slot) {    return A3(proceed,bracket,slot,$Bets$Types.HomeTeam);});
+   var proceedAway = F2(function (bracket,slot) {    return A3(proceed,bracket,slot,$Bets$Types.AwayTeam);});
+   var set = F3(function (bracket,slot,qualifier) {
+      var _p23 = bracket;
+      if (_p23.ctor === "MatchNode") {
+            var currentWinner = winner(bracket);
+            var newAway = A3(set,_p23._3,slot,qualifier);
+            var newHome = A3(set,_p23._2,slot,qualifier);
+            var newBracket = A6($Bets$Types.MatchNode,_p23._0,_p23._1,newHome,newAway,_p23._4,_p23._5);
+            return A2(reset,newBracket,currentWinner);
+         } else {
+            return _U.eq(_p23._0,slot) ? A3($Bets$Types.TeamNode,slot,qualifier,_p23._2) : bracket;
+         }
+   });
+   var setBulk = F2(function (bracket,slots) {
+      var set$ = F2(function (_p24,brkt) {    var _p25 = _p24;return A3(set,brkt,_p25._0,_p25._1);});
+      return A3($List.foldl,set$,bracket,slots);
+   });
+   var unsetQualifier = F2(function (bracket,qualifier) {
+      var _p26 = bracket;
+      if (_p26.ctor === "MatchNode") {
+            var currentWinner = winner(bracket);
+            var newAway = A2(unsetQualifier,_p26._3,qualifier);
+            var newHome = A2(unsetQualifier,_p26._2,qualifier);
+            var newBracket = A6($Bets$Types.MatchNode,_p26._0,_p26._1,newHome,newAway,_p26._4,_p26._5);
+            return A2(reset,newBracket,currentWinner);
+         } else {
+            return _U.eq(_p26._1,qualifier) ? A3($Bets$Types.TeamNode,_p26._0,$Maybe.Nothing,_p26._2) : bracket;
+         }
+   });
+   return _elm.Bets.Types.Bracket.values = {_op: _op
+                                           ,set: set
+                                           ,setBulk: setBulk
+                                           ,proceed: proceed
+                                           ,proceedHome: proceedHome
+                                           ,proceedAway: proceedAway
+                                           ,winner: winner
+                                           ,unsetQualifier: unsetQualifier
+                                           ,get: get
+                                           ,qualifier: qualifier
+                                           ,display: display
+                                           ,isComplete: isComplete
+                                           ,encode: encode
+                                           ,decode: decode
+                                           ,decodeWinner: decodeWinner};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Json = Elm.Bets.Json || {};
+Elm.Bets.Json.Encode = Elm.Bets.Json.Encode || {};
+Elm.Bets.Json.Encode.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Json = _elm.Bets.Json || {};
+   _elm.Bets.Json.Encode = _elm.Bets.Json.Encode || {};
+   if (_elm.Bets.Json.Encode.values) return _elm.Bets.Json.Encode.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var mIntEnc = function (mInt) {    var _p0 = mInt;if (_p0.ctor === "Just") {    return $Json$Encode.$int(_p0._0);} else {    return $Json$Encode.$null;}};
+   var mStrEnc = function (mStr) {    var _p1 = mStr;if (_p1.ctor === "Just") {    return $Json$Encode.string(_p1._0);} else {    return $Json$Encode.$null;}};
+   return _elm.Bets.Json.Encode.values = {_op: _op,mStrEnc: mStrEnc,mIntEnc: mIntEnc};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Score = Elm.Bets.Types.Score || {};
+Elm.Bets.Types.Score.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Score = _elm.Bets.Types.Score || {};
+   if (_elm.Bets.Types.Score.values) return _elm.Bets.Types.Score.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Json$Encode = Elm.Bets.Json.Encode.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var encode = function (_p0) {    var _p1 = _p0;return $Json$Encode.list(_U.list([$Bets$Json$Encode.mIntEnc(_p1._0),$Bets$Json$Encode.mIntEnc(_p1._1)]));};
+   var encodeMaybe = function (mScore) {    var _p2 = mScore;if (_p2.ctor === "Nothing") {    return $Json$Encode.$null;} else {    return encode(_p2._0);}};
+   var isComplete = function (mScore) {
+      var _p3 = mScore;
+      if (_p3.ctor === "Just" && _p3._0.ctor === "_Tuple2" && _p3._0._0.ctor === "Just" && _p3._0._1.ctor === "Just") {
+            return true;
+         } else {
+            return false;
+         }
+   };
+   var asString = function (_p4) {
+      var _p5 = _p4;
+      var str = function (mInt) {    return A2($Maybe.withDefault,"_",A2($Maybe.map,$Basics.toString,mInt));};
+      return A3($List.foldr,F2(function (x,y) {    return A2($Basics._op["++"],x,y);}),"",_U.list([str(_p5._0),"-",str(_p5._1)]));
+   };
+   var merge = F2(function (newScore,oldScore) {
+      var _p6 = oldScore;
+      var oldHome = _p6._0;
+      var oldAway = _p6._1;
+      var _p7 = newScore;
+      var newHome = _p7._0;
+      var newAway = _p7._1;
+      var home = function () {    var _p8 = newHome;if (_p8.ctor === "Just") {    return newHome;} else {    return oldHome;}}();
+      var away = function () {    var _p9 = newAway;if (_p9.ctor === "Just") {    return newAway;} else {    return oldHome;}}();
+      var score = {ctor: "_Tuple2",_0: home,_1: away};
+      return score;
+   });
+   var score = F2(function (h,a) {    return {ctor: "_Tuple2",_0: h,_1: a};});
+   var decode = A3($Json$Decode.tuple2,score,$Json$Decode.maybe($Json$Decode.$int),$Json$Decode.maybe($Json$Decode.$int));
+   var awayScore = function (_p10) {    var _p11 = _p10;return _p11._1;};
+   var homeScore = function (_p12) {    var _p13 = _p12;return _p13._0;};
+   return _elm.Bets.Types.Score.values = {_op: _op
+                                         ,homeScore: homeScore
+                                         ,awayScore: awayScore
+                                         ,asString: asString
+                                         ,merge: merge
+                                         ,isComplete: isComplete
+                                         ,decode: decode
+                                         ,encode: encode
+                                         ,encodeMaybe: encodeMaybe};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Group = Elm.Bets.Types.Group || {};
+Elm.Bets.Types.Group.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Group = _elm.Bets.Types.Group || {};
+   if (_elm.Bets.Types.Group.values) return _elm.Bets.Types.Group.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var toGroup = function (s) {
+      var _p0 = s;
+      switch (_p0)
+      {case "A": return $Bets$Types.A;
+         case "B": return $Bets$Types.B;
+         case "C": return $Bets$Types.C;
+         case "D": return $Bets$Types.D;
+         case "E": return $Bets$Types.E;
+         default: return $Bets$Types.F;}
+   };
+   var decode = A2($Json$Decode.map,toGroup,$Json$Decode.string);
+   var toString = function (grp) {
+      var _p1 = grp;
+      switch (_p1.ctor)
+      {case "A": return "A";
+         case "B": return "B";
+         case "C": return "C";
+         case "D": return "D";
+         case "E": return "E";
+         default: return "F";}
+   };
+   var encode = function (grp) {    return $Json$Encode.string(toString(grp));};
+   return _elm.Bets.Types.Group.values = {_op: _op,encode: encode,decode: decode,toString: toString,toGroup: toGroup};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.BestThirds = Elm.Bets.Types.BestThirds || {};
+Elm.Bets.Types.BestThirds.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.BestThirds = _elm.Bets.Types.BestThirds || {};
+   if (_elm.Bets.Types.BestThirds.values) return _elm.Bets.Types.BestThirds.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Group = Elm.Bets.Types.Group.make(_elm),
+   $Bets$Types$Team = Elm.Bets.Types.Team.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Set = Elm.Set.make(_elm),
+   $Signal = Elm.Signal.make(_elm),
+   $String = Elm.String.make(_elm);
+   var _op = {};
+   var encodeBestThird = function (_p0) {
+      var _p1 = _p0;
+      return $Json$Encode.list(_U.list([$Bets$Types$Group.encode(_p1._0),$Bets$Types$Team.encode(_p1._1),$Json$Encode.string(_p1._2)]));
+   };
+   var encode = function (bestThirds) {    return $Json$Encode.list(A2($List.map,encodeBestThird,bestThirds));};
+   var isComplete = function (bts) {
+      var numberOfTeams = $Set.size($Set.fromList(A2($List.map,function (_p2) {    var _p3 = _p2;return _p3._1.teamID;},bts)));
+      var numberOfGroups = $Set.size($Set.fromList(A2($List.map,function (_p4) {    var _p5 = _p4;return $Bets$Types$Group.toString(_p5._0);},bts)));
+      var numberOfBts = $List.length(bts);
+      return _U.eq(numberOfBts,4) && (_U.eq(numberOfTeams,4) && _U.eq(numberOfGroups,4));
+   };
+   var toBestThird = F3(function (v0,v1,v2) {    return {ctor: "_Tuple3",_0: v0,_1: v1,_2: v2};});
+   var decodeBestThird = A4($Json$Decode.tuple3,toBestThird,$Bets$Types$Group.decode,$Bets$Types$Team.decode,$Json$Decode.string);
+   var decode = $Json$Decode.list(decodeBestThird);
+   var extractChoices = function (bts) {    return A2($List.map,function (_p6) {    var _p7 = _p6;return {ctor: "_Tuple2",_0: _p7._0,_1: _p7._1};},bts);};
+   var gcompare = F2(function (g1,g2) {    return A2($Basics.compare,$Basics.toString(g1),$Basics.toString(g2));});
+   var order = function (groups) {
+      var _p8 = groups;
+      switch (_p8)
+      {case "ABCD": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                   ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.D}
+                                   ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.A}
+                                   ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.B}]);
+         case "ABCE": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.E}]);
+         case "ABCF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.F}]);
+         case "ABDE": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.E}]);
+         case "ABDF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.F}]);
+         case "ABEF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.E}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.F}]);
+         case "ACDE": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.E}]);
+         case "ACDF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.F}]);
+         case "ACEF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.F}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.E}]);
+         case "ADEF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.A}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.F}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.E}]);
+         case "BCDE": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.E}]);
+         case "BCDF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.F}]);
+         case "BCEF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.E}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.F}]);
+         case "BDEF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.E}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.B}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.F}]);
+         case "CDEF": return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                     ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.D}
+                                     ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.F}
+                                     ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.E}]);
+         default: return _U.list([{ctor: "_Tuple2",_0: "T1",_1: $Bets$Types.C}
+                                 ,{ctor: "_Tuple2",_0: "T2",_1: $Bets$Types.D}
+                                 ,{ctor: "_Tuple2",_0: "T3",_1: $Bets$Types.A}
+                                 ,{ctor: "_Tuple2",_0: "T4",_1: $Bets$Types.B}]);}
+   };
+   var reorderChoices = function (choices) {
+      var choiceCompare = F2(function (_p10,_p9) {    var _p11 = _p10;var _p12 = _p9;return A2(gcompare,_p11._0,_p12._0);});
+      var sChoices = A2($List.sortWith,choiceCompare,choices);
+      var groupsString = $String.concat(A2($List.map,$Basics.toString,A2($List.map,$Basics.fst,sChoices)));
+      var tupleCompare = F2(function (_p14,_p13) {    var _p15 = _p14;var _p16 = _p13;return A2(gcompare,_p15._1,_p16._1);});
+      return A3($List.map2,
+      F2(function (v0,v1) {    return {ctor: "_Tuple2",_0: v0,_1: v1};}),
+      sChoices,
+      A2($List.map,$Basics.fst,A2($List.sortWith,tupleCompare,order(groupsString))));
+   };
+   var isGroup = F2(function (_p18,_p17) {    var _p19 = _p18;var _p20 = _p17;return _U.eq(_p19._0,_p20._0);});
+   var updateChoice = F2(function (choice,choices) {
+      var _p21 = choices;
+      if (_p21.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            var _p23 = _p21._1;
+            var _p22 = _p21._0;
+            return A2(isGroup,choice,_p22) ? A2($List._op["::"],choice,_p23) : A2($List._op["::"],_p22,A2(updateChoice,choice,_p23));
+         }
+   });
+   var isChoice = F2(function (_p25,_p24) {    var _p26 = _p25;var _p27 = _p24;return _U.eq(_p26._0,_p27._0) && _U.eq(_p26._1,_p27._1);});
+   var resetChoice = F2(function (choice,choices) {
+      var _p28 = choices;
+      if (_p28.ctor === "[]") {
+            return _U.list([]);
+         } else {
+            var _p30 = _p28._1;
+            var _p29 = _p28._0;
+            return A2(isChoice,choice,_p29) ? _p30 : A2($List._op["::"],_p29,A2(resetChoice,choice,_p30));
+         }
+   });
+   var newChoices = F5(function (mToggleOff,mGroupToggle,mFreeSlot,choice,currentChoices) {
+      var _p31 = {ctor: "_Tuple3",_0: mToggleOff,_1: mGroupToggle,_2: mFreeSlot};
+      _v15_3: do {
+         if (_p31.ctor === "_Tuple3") {
+               if (_p31._0 === true) {
+                     return A2(resetChoice,choice,currentChoices);
+                  } else {
+                     if (_p31._1 === true) {
+                           return A2(updateChoice,choice,currentChoices);
+                        } else {
+                           if (_p31._2 === true) {
+                                 return A2($List._op["::"],choice,currentChoices);
+                              } else {
+                                 break _v15_3;
+                              }
+                        }
+                  }
+            } else {
+               break _v15_3;
+            }
+      } while (false);
+      return currentChoices;
+   });
+   var toBestThirds = function (assignedChoices) {
+      var toBestThird = function (_p32) {    var _p33 = _p32;return {ctor: "_Tuple3",_0: _p33._0._0,_1: _p33._0._1,_2: _p33._1};};
+      return A2($List.map,toBestThird,assignedChoices);
+   };
+   var teamsToReset = F2(function (oldAssignments,newAssignments) {
+      teamsToReset: while (true) {
+         var thrd = function (_p34) {    var _p35 = _p34;return _p35._2;};
+         var sortedOld = A2($List.sortBy,thrd,oldAssignments);
+         var sortedNew = A2($List.sortBy,thrd,newAssignments);
+         var _p36 = {ctor: "_Tuple2",_0: sortedOld,_1: sortedNew};
+         if (_p36._0.ctor === "[]") {
+               if (_p36._1.ctor === "[]") {
+                     return _U.list([]);
+                  } else {
+                     return A2($List._op["::"],_p36._1._0._1,A2(teamsToReset,_U.list([]),_p36._1._1));
+                  }
+            } else {
+               if (_p36._1.ctor === "[]") {
+                     return A2($List._op["::"],_p36._0._0._1,A2(teamsToReset,_U.list([]),_p36._0._1));
+                  } else {
+                     var _p41 = _p36._1._0._1;
+                     var _p40 = _p36._0._0._1;
+                     var _p39 = _p36._0._1;
+                     var _p38 = _p36._1._1;
+                     var _p37 = A2($Basics.compare,_p36._0._0._2,_p36._1._0._2);
+                     switch (_p37.ctor)
+                     {case "GT": return A2($List._op["::"],_p41,A2(teamsToReset,sortedOld,_p38));
+                        case "LT": return A2($List._op["::"],_p40,A2(teamsToReset,_p39,sortedNew));
+                        default: if (_U.eq(_p40,_p41)) {
+                                var _v20 = _p39,_v21 = _p38;
+                                oldAssignments = _v20;
+                                newAssignments = _v21;
+                                continue teamsToReset;
+                             } else return A2($List._op["::"],_p40,A2($List._op["::"],_p41,A2(teamsToReset,_p39,_p38)));}
+                  }
+            }
+      }
+   });
+   var updateChoices = F3(function (group,team,currentBestThirds) {
+      var currentChoices = extractChoices(currentBestThirds);
+      var bFreeSlot = _U.cmp($List.length(currentChoices),4) < 0;
+      var choice = {ctor: "_Tuple2",_0: group,_1: team};
+      var bToggleOff = A2($List.any,isChoice(choice),currentChoices);
+      var bGroupToggle = A2($List.any,isGroup(choice),currentChoices);
+      var tempChoices = A5(newChoices,bToggleOff,bGroupToggle,bFreeSlot,choice,currentChoices);
+      return toBestThirds(reorderChoices(tempChoices));
+   });
+   return _elm.Bets.Types.BestThirds.values = {_op: _op
+                                              ,updateChoices: updateChoices
+                                              ,teamsToReset: teamsToReset
+                                              ,isComplete: isComplete
+                                              ,encode: encode
+                                              ,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Pos = Elm.Bets.Types.Pos || {};
+Elm.Bets.Types.Pos.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Pos = _elm.Bets.Types.Pos || {};
+   if (_elm.Bets.Types.Pos.values) return _elm.Bets.Types.Pos.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var toPos = function (s) {
+      var _p0 = s;
+      switch (_p0)
+      {case "First": return $Bets$Types.First;
+         case "Second": return $Bets$Types.Second;
+         case "Third": return $Bets$Types.Third;
+         case "TopThird": return $Bets$Types.TopThird;
+         default: return $Bets$Types.Free;}
+   };
+   var decode = A2($Json$Decode.map,toPos,$Json$Decode.string);
+   var toString = function (pos) {
+      var _p1 = pos;
+      switch (_p1.ctor)
+      {case "First": return "First";
+         case "Second": return "Second";
+         case "Third": return "Third";
+         case "TopThird": return "TopThird";
+         default: return "Free";}
+   };
+   var encode = function (pos) {    return $Json$Encode.string(toString(pos));};
+   return _elm.Bets.Types.Pos.values = {_op: _op,encode: encode,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Participant = Elm.Bets.Types.Participant || {};
+Elm.Bets.Types.Participant.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Participant = _elm.Bets.Types.Participant || {};
+   if (_elm.Bets.Types.Participant.values) return _elm.Bets.Types.Participant.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Json$Encode = Elm.Bets.Json.Encode.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Maybe$Extra = Elm.Maybe.Extra.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var encode = function (p) {
+      return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "name",_1: $Bets$Json$Encode.mStrEnc(p.name)}
+                                         ,{ctor: "_Tuple2",_0: "address",_1: $Bets$Json$Encode.mStrEnc(p.address)}
+                                         ,{ctor: "_Tuple2",_0: "residence",_1: $Bets$Json$Encode.mStrEnc(p.residence)}
+                                         ,{ctor: "_Tuple2",_0: "phone",_1: $Bets$Json$Encode.mStrEnc(p.phone)}
+                                         ,{ctor: "_Tuple2",_0: "email",_1: $Bets$Json$Encode.mStrEnc(p.email)}
+                                         ,{ctor: "_Tuple2",_0: "howyouknowus",_1: $Bets$Json$Encode.mStrEnc(p.howyouknowus)}]));
+   };
+   var decode = A7($Json$Decode.object6,
+   $Bets$Types.Participant,
+   $Json$Decode.maybe(A2($Json$Decode._op[":="],"name",$Json$Decode.string)),
+   $Json$Decode.maybe(A2($Json$Decode._op[":="],"address",$Json$Decode.string)),
+   $Json$Decode.maybe(A2($Json$Decode._op[":="],"residence",$Json$Decode.string)),
+   $Json$Decode.maybe(A2($Json$Decode._op[":="],"phone",$Json$Decode.string)),
+   $Json$Decode.maybe(A2($Json$Decode._op[":="],"email",$Json$Decode.string)),
+   $Json$Decode.maybe(A2($Json$Decode._op[":="],"howyouknowus",$Json$Decode.string)));
+   var isComplete = function (participant) {
+      return $Maybe$Extra.isJust($Maybe$Extra.combine(_U.list([participant.name
+                                                              ,participant.address
+                                                              ,participant.phone
+                                                              ,participant.email
+                                                              ,participant.howyouknowus])));
+   };
+   var setHowyouknowus = F2(function (participant,howyouknowus) {    return _U.update(participant,{howyouknowus: $Maybe.Just(howyouknowus)});});
+   var setEmail = F2(function (participant,email) {    return _U.update(participant,{email: $Maybe.Just(email)});});
+   var setPhoneNumber = F2(function (participant,phone) {    return _U.update(participant,{phone: $Maybe.Just(phone)});});
+   var setAddress = F2(function (participant,address) {    return _U.update(participant,{address: $Maybe.Just(address)});});
+   var setName = F2(function (participant,name) {    return _U.update(participant,{name: $Maybe.Just(name)});});
+   var init = A6($Bets$Types.Participant,$Maybe.Nothing,$Maybe.Nothing,$Maybe.Nothing,$Maybe.Nothing,$Maybe.Nothing,$Maybe.Nothing);
+   return _elm.Bets.Types.Participant.values = {_op: _op
+                                               ,setName: setName
+                                               ,setAddress: setAddress
+                                               ,setPhoneNumber: setPhoneNumber
+                                               ,setEmail: setEmail
+                                               ,init: init
+                                               ,isComplete: isComplete
+                                               ,encode: encode
+                                               ,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Topscorer = Elm.Bets.Types.Topscorer || {};
+Elm.Bets.Types.Topscorer.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Topscorer = _elm.Bets.Types.Topscorer || {};
+   if (_elm.Bets.Types.Topscorer.values) return _elm.Bets.Types.Topscorer.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Json$Encode = Elm.Bets.Json.Encode.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Team = Elm.Bets.Types.Team.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Maybe$Extra = Elm.Maybe.Extra.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var TopscorerObject = F2(function (a,b) {    return {name: a,team: b};});
+   var decodeTSObj = A3($Json$Decode.object2,
+   TopscorerObject,
+   A2($Json$Decode._op[":="],"name",$Json$Decode.maybe($Json$Decode.string)),
+   A2($Json$Decode._op[":="],"team",$Json$Decode.maybe($Bets$Types$Team.decode)));
+   var encode = function (_p0) {
+      var _p1 = _p0;
+      return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "name",_1: $Bets$Json$Encode.mStrEnc(_p1._0)}
+                                         ,{ctor: "_Tuple2",_0: "team",_1: $Bets$Types$Team.encodeMaybe(_p1._1)}]));
+   };
+   var isComplete = function (_p2) {    var _p3 = _p2;return $Maybe$Extra.isJust(_p3._0) && $Maybe$Extra.isJust(_p3._1);};
+   var topscorer = F2(function (mName,mTeam) {    return {ctor: "_Tuple2",_0: mName,_1: mTeam};});
+   var decode = A2($Json$Decode.map,function (x) {    return A2(topscorer,x.name,x.team);},decodeTSObj);
+   var setPlayer = F2(function (_p4,player) {
+      var _p5 = _p4;
+      var _p7 = _p5._1;
+      var _p6 = _p5._0;
+      if (_p6.ctor === "Nothing") {
+            return {ctor: "_Tuple2",_0: $Maybe.Just(player),_1: _p7};
+         } else {
+            return _U.eq(_p6._0,player) ? {ctor: "_Tuple2",_0: $Maybe.Nothing,_1: _p7} : {ctor: "_Tuple2",_0: $Maybe.Just(player),_1: _p7};
+         }
+   });
+   var getPlayer = function (ts) {    return $Basics.fst(ts);};
+   var getTeam = function (ts) {    return $Basics.snd(ts);};
+   var setTeam = F2(function (ts,team) {
+      var _p8 = getTeam(ts);
+      if (_p8.ctor === "Nothing") {
+            return {ctor: "_Tuple2",_0: $Maybe.Nothing,_1: $Maybe.Just(team)};
+         } else {
+            return _U.eq(_p8._0,team) ? {ctor: "_Tuple2",_0: $Maybe.Nothing,_1: $Maybe.Nothing} : {ctor: "_Tuple2",_0: $Maybe.Nothing,_1: $Maybe.Just(team)};
+         }
+   });
+   return _elm.Bets.Types.Topscorer.values = {_op: _op
+                                             ,getTeam: getTeam
+                                             ,setTeam: setTeam
+                                             ,getPlayer: getPlayer
+                                             ,setPlayer: setPlayer
+                                             ,isComplete: isComplete
+                                             ,decode: decode
+                                             ,encode: encode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Points = Elm.Bets.Types.Points || {};
+Elm.Bets.Types.Points.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Points = _elm.Bets.Types.Points || {};
+   if (_elm.Bets.Types.Points.values) return _elm.Bets.Types.Points.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Json$Encode = Elm.Bets.Json.Encode.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var decode = $Json$Decode.maybe($Json$Decode.$int);
+   var encode = function (points) {    return $Bets$Json$Encode.mIntEnc(points);};
+   return _elm.Bets.Types.Points.values = {_op: _op,encode: encode,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Answer = Elm.Bets.Types.Answer || {};
+Elm.Bets.Types.Answer.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Answer = _elm.Bets.Types.Answer || {};
+   if (_elm.Bets.Types.Answer.values) return _elm.Bets.Types.Answer.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Json$Encode = Elm.Bets.Json.Encode.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$BestThirds = Elm.Bets.Types.BestThirds.make(_elm),
+   $Bets$Types$Bracket = Elm.Bets.Types.Bracket.make(_elm),
+   $Bets$Types$Draw = Elm.Bets.Types.Draw.make(_elm),
+   $Bets$Types$Group = Elm.Bets.Types.Group.make(_elm),
+   $Bets$Types$Match = Elm.Bets.Types.Match.make(_elm),
+   $Bets$Types$Participant = Elm.Bets.Types.Participant.make(_elm),
+   $Bets$Types$Points = Elm.Bets.Types.Points.make(_elm),
+   $Bets$Types$Pos = Elm.Bets.Types.Pos.make(_elm),
+   $Bets$Types$Round = Elm.Bets.Types.Round.make(_elm),
+   $Bets$Types$Score = Elm.Bets.Types.Score.make(_elm),
+   $Bets$Types$Team = Elm.Bets.Types.Team.make(_elm),
+   $Bets$Types$Topscorer = Elm.Bets.Types.Topscorer.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var decodeAnswerTDetails = function (s) {
+      var _p0 = s;
+      switch (_p0)
+      {case "answer-group-match": return A5($Json$Decode.object4,
+           $Bets$Types.AnswerGroupMatch,
+           A2($Json$Decode._op[":="],"group",$Bets$Types$Group.decode),
+           A2($Json$Decode._op[":="],"match",$Bets$Types$Match.decode),
+           A2($Json$Decode._op[":="],"score",$Json$Decode.maybe($Bets$Types$Score.decode)),
+           A2($Json$Decode._op[":="],"points",$Bets$Types$Points.decode));
+         case "answer-group-position": return A5($Json$Decode.object4,
+           $Bets$Types.AnswerGroupPosition,
+           A2($Json$Decode._op[":="],"group",$Bets$Types$Group.decode),
+           A2($Json$Decode._op[":="],"pos",$Bets$Types$Pos.decode),
+           A2($Json$Decode._op[":="],"draw",$Bets$Types$Draw.decode),
+           A2($Json$Decode._op[":="],"points",$Bets$Types$Points.decode));
+         case "answer-group-best-thirds": return A3($Json$Decode.object2,
+           $Bets$Types.AnswerGroupBestThirds,
+           A2($Json$Decode._op[":="],"best-thirds",$Bets$Types$BestThirds.decode),
+           A2($Json$Decode._op[":="],"points",$Bets$Types$Points.decode));
+         case "answer-match-winner": return A6($Json$Decode.object5,
+           $Bets$Types.AnswerMatchWinner,
+           A2($Json$Decode._op[":="],"round",$Bets$Types$Round.decode),
+           A2($Json$Decode._op[":="],"match",$Bets$Types$Match.decode),
+           A2($Json$Decode._op[":="],"next-id",$Json$Decode.maybe($Json$Decode.string)),
+           A2($Json$Decode._op[":="],"team",$Json$Decode.maybe($Bets$Types$Team.decode)),
+           A2($Json$Decode._op[":="],"points",$Bets$Types$Points.decode));
+         case "answer-bracket": return A3($Json$Decode.object2,
+           $Bets$Types.AnswerBracket,
+           A2($Json$Decode._op[":="],"bracket",$Bets$Types$Bracket.decode),
+           A2($Json$Decode._op[":="],"points",$Bets$Types$Points.decode));
+         case "answer-topscorer": return A3($Json$Decode.object2,
+           $Bets$Types.AnswerTopscorer,
+           A2($Json$Decode._op[":="],"topscorer",$Bets$Types$Topscorer.decode),
+           A2($Json$Decode._op[":="],"points",$Bets$Types$Points.decode));
+         case "answer-participant": return A2($Json$Decode.object1,
+           $Bets$Types.AnswerParticipant,
+           A2($Json$Decode._op[":="],"participant",$Bets$Types$Participant.decode));
+         default: return $Json$Decode.fail("unknown type of question");}
+   };
+   var decode = A2($Json$Decode.andThen,A2($Json$Decode._op[":="],"answerType",$Json$Decode.string),decodeAnswerTDetails);
+   var encodeAnswerT = function (answerT) {
+      var _p1 = answerT;
+      switch (_p1.ctor)
+      {case "AnswerGroupMatch": return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "answerType",_1: $Json$Encode.string("answer-group-match")}
+                                                                   ,{ctor: "_Tuple2",_0: "group",_1: $Bets$Types$Group.encode(_p1._0)}
+                                                                   ,{ctor: "_Tuple2",_0: "match",_1: $Bets$Types$Match.encode(_p1._1)}
+                                                                   ,{ctor: "_Tuple2",_0: "score",_1: $Bets$Types$Score.encodeMaybe(_p1._2)}
+                                                                   ,{ctor: "_Tuple2",_0: "points",_1: $Bets$Types$Points.encode(_p1._3)}]));
+         case "AnswerGroupPosition": return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "answerType",_1: $Json$Encode.string("answer-group-position")}
+                                                                        ,{ctor: "_Tuple2",_0: "group",_1: $Bets$Types$Group.encode(_p1._0)}
+                                                                        ,{ctor: "_Tuple2",_0: "pos",_1: $Bets$Types$Pos.encode(_p1._1)}
+                                                                        ,{ctor: "_Tuple2",_0: "draw",_1: $Bets$Types$Draw.encode(_p1._2)}
+                                                                        ,{ctor: "_Tuple2",_0: "points",_1: $Bets$Types$Points.encode(_p1._3)}]));
+         case "AnswerGroupBestThirds": return $Json$Encode.object(_U.list([{ctor: "_Tuple2"
+                                                                           ,_0: "answerType"
+                                                                           ,_1: $Json$Encode.string("answer-group-best-thirds")}
+                                                                          ,{ctor: "_Tuple2",_0: "best-thirds",_1: $Bets$Types$BestThirds.encode(_p1._0)}
+                                                                          ,{ctor: "_Tuple2",_0: "points",_1: $Bets$Types$Points.encode(_p1._1)}]));
+         case "AnswerMatchWinner": return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "answerType",_1: $Json$Encode.string("answer-match-winner")}
+                                                                      ,{ctor: "_Tuple2",_0: "round",_1: $Bets$Types$Round.encode(_p1._0)}
+                                                                      ,{ctor: "_Tuple2",_0: "match",_1: $Bets$Types$Match.encode(_p1._1)}
+                                                                      ,{ctor: "_Tuple2",_0: "next-id",_1: $Bets$Json$Encode.mStrEnc(_p1._2)}
+                                                                      ,{ctor: "_Tuple2",_0: "team",_1: $Bets$Types$Team.encodeMaybe(_p1._3)}
+                                                                      ,{ctor: "_Tuple2",_0: "points",_1: $Bets$Types$Points.encode(_p1._4)}]));
+         case "AnswerBracket": return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "answerType",_1: $Json$Encode.string("answer-bracket")}
+                                                                  ,{ctor: "_Tuple2",_0: "bracket",_1: $Bets$Types$Bracket.encode(_p1._0)}
+                                                                  ,{ctor: "_Tuple2",_0: "points",_1: $Bets$Types$Points.encode(_p1._1)}]));
+         case "AnswerTopscorer": return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "answerType",_1: $Json$Encode.string("answer-topscorer")}
+                                                                    ,{ctor: "_Tuple2",_0: "topscorer",_1: $Bets$Types$Topscorer.encode(_p1._0)}
+                                                                    ,{ctor: "_Tuple2",_0: "points",_1: $Bets$Types$Points.encode(_p1._1)}]));
+         default: return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "answerType",_1: $Json$Encode.string("answer-participant")}
+                                                     ,{ctor: "_Tuple2",_0: "participant",_1: $Bets$Types$Participant.encode(_p1._0)}]));}
+   };
+   var encode = function (_p2) {
+      var _p3 = _p2;
+      return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "id",_1: $Json$Encode.string(_p3._0)}
+                                         ,{ctor: "_Tuple2",_0: "answer",_1: encodeAnswerT(_p3._1)}]));
+   };
+   var encodeAnswer = function (_p4) {    var _p5 = _p4;return {ctor: "_Tuple2",_0: _p5._0,_1: encodeAnswerT(_p5._1)};};
+   var summary = function (_p6) {
+      var _p7 = _p6;
+      var _p8 = _p7._1;
+      switch (_p8.ctor)
+      {case "AnswerGroupMatch": return A2($Basics._op["++"],"Wedstrijden ",$Bets$Types$Group.toString(_p8._0));
+         case "AnswerGroupPosition": return A2($Basics._op["++"],"Stand ",$Bets$Types$Group.toString(_p8._0));
+         case "AnswerGroupBestThirds": return "Beste nummers 3";
+         case "AnswerMatchWinner": return "MatchWinner";
+         case "AnswerBracket": return "Schema";
+         case "AnswerTopscorer": return "Topscorer";
+         default: return "Over jou";}
+   };
+   var isComplete = function (_p9) {
+      var _p10 = _p9;
+      var _p11 = _p10._1;
+      switch (_p11.ctor)
+      {case "AnswerGroupMatch": return $Bets$Types$Score.isComplete(_p11._2);
+         case "AnswerGroupPosition": return $Bets$Types$Draw.isComplete(_p11._2);
+         case "AnswerGroupBestThirds": return $Bets$Types$BestThirds.isComplete(_p11._0);
+         case "AnswerMatchWinner": return A2($Bets$Types$Match.isComplete,_p11._1,_p11._3);
+         case "AnswerBracket": return $Bets$Types$Bracket.isComplete(_p11._0);
+         case "AnswerTopscorer": return $Bets$Types$Topscorer.isComplete(_p11._0);
+         default: return $Bets$Types$Participant.isComplete(_p11._0);}
+   };
+   return _elm.Bets.Types.Answer.values = {_op: _op,isComplete: isComplete,summary: summary,encode: encode,encodeAnswer: encodeAnswer,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Answers = Elm.Bets.Types.Answers || {};
+Elm.Bets.Types.Answers.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Answers = _elm.Bets.Types.Answers || {};
+   if (_elm.Bets.Types.Answers.values) return _elm.Bets.Types.Answers.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Answer = Elm.Bets.Types.Answer.make(_elm),
+   $Bets$Types$BestThirds = Elm.Bets.Types.BestThirds.make(_elm),
+   $Bets$Types$Bracket = Elm.Bets.Types.Bracket.make(_elm),
+   $Bets$Types$Match = Elm.Bets.Types.Match.make(_elm),
+   $Bets$Types$Round = Elm.Bets.Types.Round.make(_elm),
+   $Bets$Types$Score = Elm.Bets.Types.Score.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Dict = Elm.Dict.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var decode = A2($Json$Decode.map,$Dict.toList,$Json$Decode.dict($Bets$Types$Answer.decode));
+   var encode = function (answers) {    var d = A2($List.map,$Bets$Types$Answer.encodeAnswer,answers);return $Json$Encode.object(d);};
+   var findGroupAnswers = F2(function (fltr,answers) {    return A2($List.filter,fltr,answers);});
+   var isGroupPositionAnswer = F2(function (grp,_p0) {
+      var _p1 = _p0;
+      var _p2 = _p1._1;
+      if (_p2.ctor === "AnswerGroupPosition") {
+            return _U.eq(_p2._0,grp);
+         } else {
+            return false;
+         }
+   });
+   var findGroupPositionAnswers = F2(function (grp,answers) {    return A2(findGroupAnswers,isGroupPositionAnswer(grp),answers);});
+   var isGroupMatchScoreAnswer = F2(function (grp,_p3) {
+      var _p4 = _p3;
+      var _p5 = _p4._1;
+      if (_p5.ctor === "AnswerGroupMatch") {
+            return _U.eq(_p5._0,grp);
+         } else {
+            return false;
+         }
+   });
+   var findGroupMatchAnswers = F2(function (grp,answers) {    return A2(findGroupAnswers,isGroupMatchScoreAnswer(grp),answers);});
+   var unsetTeamsMatch = F2(function (match,teams) {    return A3($List.foldr,$Basics.flip($Bets$Types$Match.unsetTeamMatch),match,teams);});
+   var unsetMatchWinner = F7(function (teams,answerId,r,match,nextID,mTeam,points) {
+      var newMatch = A2(unsetTeamsMatch,match,teams);
+      var newAnswer = function (mTm) {    return {ctor: "_Tuple2",_0: answerId,_1: A5($Bets$Types.AnswerMatchWinner,r,newMatch,nextID,mTm,points)};};
+      var _p6 = mTeam;
+      if (_p6.ctor === "Nothing") {
+            return newAnswer($Maybe.Nothing);
+         } else {
+            return A2($List.member,_p6._0,teams) ? newAnswer($Maybe.Nothing) : newAnswer(mTeam);
+         }
+   });
+   var unsetTeamAnswer = F3(function (teams,rnd,answer) {
+      var _p7 = answer;
+      _v5_3: do {
+         if (_p7.ctor === "_Tuple2") {
+               switch (_p7._1.ctor)
+               {case "AnswerGroupPosition": var _p8 = {ctor: "_Tuple2",_0: rnd,_1: _p7._1._2};
+                    if (_p8.ctor === "_Tuple2" && _p8._0.ctor === "I" && _p8._1.ctor === "_Tuple2" && _p8._1._1.ctor === "Just") {
+                          return A2($List.member,_p8._1._1._0,teams) ? {ctor: "_Tuple2"
+                                                                       ,_0: _p7._0
+                                                                       ,_1: A4($Bets$Types.AnswerGroupPosition,
+                                                                       _p7._1._0,
+                                                                       _p7._1._1,
+                                                                       {ctor: "_Tuple2",_0: _p8._1._0,_1: $Maybe.Nothing},
+                                                                       _p7._1._3)} : answer;
+                       } else {
+                          return answer;
+                       }
+                  case "AnswerMatchWinner": var _p9 = _p7._1._0;
+                    var roundToReset = A2($Bets$Types$Round.isSameOrANextRound,_p9,rnd);
+                    return roundToReset ? A7(unsetMatchWinner,teams,_p7._0,_p9,_p7._1._1,_p7._1._2,_p7._1._3,_p7._1._4) : answer;
+                  case "AnswerBracket": var newBracket = A3($List.foldr,
+                    $Basics.flip($Bets$Types$Bracket.unsetQualifier),
+                    _p7._1._0,
+                    A2($List.map,$Maybe.Just,teams));
+                    var newAnswer = {ctor: "_Tuple2",_0: _p7._0,_1: A2($Bets$Types.AnswerBracket,newBracket,_p7._1._1)};
+                    return newAnswer;
+                  default: break _v5_3;}
+            } else {
+               break _v5_3;
+            }
+      } while (false);
+      return answer;
+   });
+   var unsetTeams = F3(function (answers,mRound,teams) {
+      var _p10 = mRound;
+      if (_p10.ctor === "Nothing") {
+            return answers;
+         } else {
+            return A2($List.map,A2(unsetTeamAnswer,teams,_p10._0),answers);
+         }
+   });
+   var updateAnswer = F2(function (newAnswer,currentAnswer) {    return _U.eq($Basics.fst(newAnswer),$Basics.fst(currentAnswer)) ? newAnswer : currentAnswer;});
+   var setAnswer = F2(function (answer,answers) {    return A2($List.map,updateAnswer(answer),answers);});
+   var getAnswer = F2(function (answers,answerID) {
+      return $List.head(A2($List.filter,function (_p11) {    var _p12 = _p11;return _U.eq(_p12._0,answerID);},answers));
+   });
+   var updateBracketAnswerBestThirds = F2(function (answers,newBestThirds) {
+      var mBrktAnswer = A2(getAnswer,answers,"br");
+      var takenSlots = A2($List.map,function (_p13) {    var _p14 = _p13;return {ctor: "_Tuple2",_0: _p14._2,_1: $Maybe.Just(_p14._1)};},newBestThirds);
+      var takenSlotIds = A2($List.map,$Basics.fst,takenSlots);
+      var openSlots = A2($List.map,
+      function (s) {
+         return {ctor: "_Tuple2",_0: s,_1: $Maybe.Nothing};
+      },
+      A2($List.filter,function (s) {    return $Basics.not(A2($List.member,s,takenSlotIds));},_U.list(["T1","T2","T3","T4"])));
+      var allSlots = A2($List.append,takenSlots,openSlots);
+      var _p15 = mBrktAnswer;
+      if (_p15.ctor === "Just" && _p15._0.ctor === "_Tuple2" && _p15._0._1.ctor === "AnswerBracket") {
+            var newBrkt = A2($Bets$Types$Bracket.setBulk,_p15._0._1._0,allSlots);
+            var newAnswer = {ctor: "_Tuple2",_0: _p15._0._0,_1: A2($Bets$Types.AnswerBracket,newBrkt,_p15._0._1._1)};
+            return A2(setAnswer,newAnswer,answers);
+         } else {
+            return answers;
+         }
+   });
+   _op["=>"] = F2(function (v0,v1) {    return {ctor: "_Tuple2",_0: v0,_1: v1};});
+   var setMatchScore = F3(function (answers,_p16,score) {
+      var _p17 = _p16;
+      var _p21 = _p17._0;
+      var _p20 = _p17._1;
+      var mergeScores = F2(function (mCurScore,newScore) {
+         var _p18 = mCurScore;
+         if (_p18.ctor === "Nothing") {
+               return $Maybe.Just(newScore);
+            } else {
+               return $Maybe.Just(A2($Bets$Types$Score.merge,newScore,_p18._0));
+            }
+      });
+      var newAnswer = function () {
+         var _p19 = _p20;
+         if (_p19.ctor === "AnswerGroupMatch") {
+               var newScore = A2(mergeScores,_p19._2,score);
+               return A2(_op["=>"],_p21,A4($Bets$Types.AnswerGroupMatch,_p19._0,_p19._1,newScore,_p19._3));
+            } else {
+               return A2(_op["=>"],_p21,_p20);
+            }
+      }();
+      return A2(setAnswer,newAnswer,answers);
+   });
+   var setTopscorer = F3(function (answers,_p22,topscorer) {
+      var _p23 = _p22;
+      var _p26 = _p23._0;
+      var _p25 = _p23._1;
+      var newAnswer = function () {
+         var _p24 = _p25;
+         if (_p24.ctor === "AnswerTopscorer") {
+               return A2(_op["=>"],_p26,A2($Bets$Types.AnswerTopscorer,topscorer,_p24._1));
+            } else {
+               return A2(_op["=>"],_p26,_p25);
+            }
+      }();
+      return A2(setAnswer,newAnswer,answers);
+   });
+   var setParticipant = F3(function (answers,_p27,participant) {
+      var _p28 = _p27;
+      var _p31 = _p28._0;
+      var _p30 = _p28._1;
+      var newAnswer = function () {
+         var _p29 = _p30;
+         if (_p29.ctor === "AnswerParticipant") {
+               return A2(_op["=>"],_p31,$Bets$Types.AnswerParticipant(participant));
+            } else {
+               return A2(_op["=>"],_p31,_p30);
+            }
+      }();
+      return A2(setAnswer,newAnswer,answers);
+   });
+   var setDrawMatchWinner = F2(function (_p33,_p32) {
+      var _p34 = _p33;
+      var _p35 = _p32;
+      var _p40 = _p35._0;
+      var _p39 = _p35._1;
+      var nextTeam = F2(function (mTm,match) {
+         var _p36 = mTm;
+         if (_p36.ctor === "Nothing") {
+               return $Maybe.Nothing;
+            } else {
+               var _p37 = _p36._0;
+               return A2($List.member,_p37,$Bets$Types$Match.teamsInMatch(match)) ? $Maybe.Just(_p37) : $Maybe.Nothing;
+            }
+      });
+      var _p38 = _p39;
+      switch (_p38.ctor)
+      {case "AnswerMatchWinner": var newMatch = A2($Bets$Types$Match.setTeamMatch,_p38._1,_p34);
+           var newSelected = A2(nextTeam,_p38._3,newMatch);
+           var newAnswer = A5($Bets$Types.AnswerMatchWinner,_p38._0,newMatch,_p38._2,newSelected,_p38._4);
+           return A2(_op["=>"],_p40,newAnswer);
+         case "AnswerBracket": var newBracket = A3($Bets$Types$Bracket.set,_p38._0,_p34._0,_p34._1);
+           var newAnswer = A2($Bets$Types.AnswerBracket,newBracket,_p38._1);
+           return A2(_op["=>"],_p40,newAnswer);
+         default: return A2(_op["=>"],_p40,_p39);}
+   });
+   var setDraw = F2(function (draw,answers) {    return A2($List.map,setDrawMatchWinner(draw),answers);});
+   var setDraws = F2(function (draws,answers) {
+      setDraws: while (true) {
+         var _p41 = draws;
+         if (_p41.ctor === "[]") {
+               return answers;
+            } else {
+               var answers$ = A2(setDraw,_p41._0,answers);
+               var _v23 = _p41._1,_v24 = answers$;
+               draws = _v23;
+               answers = _v24;
+               continue setDraws;
+            }
+      }
+   });
+   var setNext = F3(function (nextID,team,answers) {
+      var _p42 = nextID;
+      if (_p42.ctor === "Just") {
+            return A2(setDraw,{ctor: "_Tuple2",_0: _p42._0,_1: $Maybe.Just(team)},answers);
+         } else {
+            return answers;
+         }
+   });
+   var setMatchWinner = F3(function (answers,_p43,team) {
+      var _p44 = _p43;
+      var _p53 = _p44._1;
+      var _p45 = _p53;
+      if (_p45.ctor === "AnswerMatchWinner") {
+            var _p52 = _p45._0;
+            var _p51 = _p45._2;
+            var _p50 = _p45._1;
+            var _p49 = _p45._3;
+            var newAnswers = function () {
+               var _p46 = _p49;
+               if (_p46.ctor === "Nothing") {
+                     return A3(setNext,_p51,team,answers);
+                  } else {
+                     var _p47 = _p46._0;
+                     return !_U.eq(_p47,team) ? A3(setNext,_p51,team,A3(unsetTeams,answers,$Maybe.Just(_p52),_U.list([_p47]))) : A3(unsetTeams,
+                     answers,
+                     $Maybe.Just(_p52),
+                     _U.list([team]));
+                  }
+            }();
+            var newTeam = function () {
+               var _p48 = _p49;
+               if (_p48.ctor === "Nothing") {
+                     return $Maybe.Nothing;
+                  } else {
+                     return _U.eq(_p48._0,team) ? $Maybe.Nothing : $Maybe.Just(team);
+                  }
+            }();
+            var teamInMatch = A2($List.member,team,$Bets$Types$Match.teamsInMatch(_p50));
+            var newAnswer = teamInMatch ? A5($Bets$Types.AnswerMatchWinner,_p52,_p50,_p51,newTeam,_p45._4) : _p53;
+            return teamInMatch ? A2(setAnswer,{ctor: "_Tuple2",_0: _p44._0,_1: newAnswer},newAnswers) : answers;
+         } else {
+            return answers;
+         }
+   });
+   var updateMatchWinner = F3(function (drawID,mTeam,answers) {    return A2(setDraw,{ctor: "_Tuple2",_0: drawID,_1: mTeam},answers);});
+   var setGroupPosition = F6(function (answers,answerID,grp,pos,_p54,team) {
+      var _p55 = _p54;
+      var _p59 = _p55._0;
+      var _p56 = function () {
+         var _p57 = _p55._1;
+         if (_p57.ctor === "Just") {
+               var _p58 = _p57._0;
+               return _U.eq(_p58,team) ? {ctor: "_Tuple2",_0: $Maybe.Nothing,_1: _U.list([team])} : {ctor: "_Tuple2"
+                                                                                                    ,_0: $Maybe.Just(team)
+                                                                                                    ,_1: _U.list([team,_p58])};
+            } else {
+               return {ctor: "_Tuple2",_0: $Maybe.Just(team),_1: _U.list([team])};
+            }
+      }();
+      var newTeam = _p56._0;
+      var toReset = _p56._1;
+      var cleanAnswers = A3(unsetTeams,answers,$Maybe.Just($Bets$Types.I),toReset);
+      var newAnswers = A3(updateMatchWinner,_p59,newTeam,cleanAnswers);
+      var newDraw = {ctor: "_Tuple2",_0: _p59,_1: newTeam};
+      var newAnswer = A2(_op["=>"],answerID,A4($Bets$Types.AnswerGroupPosition,grp,pos,newDraw,$Maybe.Nothing));
+      return A2(setAnswer,newAnswer,newAnswers);
+   });
+   var updateBracket = F3(function (drawID,mTeam,answers) {    return A2(setDraw,{ctor: "_Tuple2",_0: drawID,_1: mTeam},answers);});
+   var setBestThirds = F5(function (answers,answerID,oldBestThirds,newgroup,team) {
+      var newBestThirds = A3($Bets$Types$BestThirds.updateChoices,newgroup,team,oldBestThirds);
+      var newAnswer = A2(_op["=>"],answerID,A2($Bets$Types.AnswerGroupBestThirds,newBestThirds,$Maybe.Nothing));
+      var newAnswers = A2(updateBracketAnswerBestThirds,answers,newBestThirds);
+      return A2(setAnswer,newAnswer,newAnswers);
+   });
+   var setBestThird = F4(function (answers,_p60,grp,team) {
+      var _p61 = _p60;
+      var _p62 = _p61._1;
+      if (_p62.ctor === "AnswerGroupBestThirds") {
+            return A5(setBestThirds,answers,_p61._0,_p62._0,grp,team);
+         } else {
+            return answers;
+         }
+   });
+   var setBestThirds$ = F5(function (answers,answerID,oldBestThirds,newgroup,team) {
+      var newBestThirds = A3($Bets$Types$BestThirds.updateChoices,newgroup,team,oldBestThirds);
+      var teamsToReset = A2($Bets$Types$BestThirds.teamsToReset,oldBestThirds,newBestThirds);
+      var draws = A2($List.map,function (_p63) {    var _p64 = _p63;return {ctor: "_Tuple2",_0: _p64._2,_1: $Maybe.Just(_p64._1)};},newBestThirds);
+      var newAnswer = A2(_op["=>"],answerID,A2($Bets$Types.AnswerGroupBestThirds,newBestThirds,$Maybe.Nothing));
+      var cleanAnswers = A2(setAnswer,newAnswer,A3(unsetTeams,answers,$Maybe.Just($Bets$Types.II),teamsToReset));
+      var allSet = _U.eq($List.length(newBestThirds),4);
+      return allSet ? A2(setDraws,draws,cleanAnswers) : cleanAnswers;
+   });
+   var setTeam = F4(function (answers,_p65,grp,team) {
+      var _p66 = _p65;
+      var _p69 = _p66._0;
+      var _p67 = _p66._1;
+      _v36_2: do {
+         switch (_p67.ctor)
+         {case "AnswerGroupPosition": if (_p67._2.ctor === "_Tuple2") {
+                    var _p68 = _p67._0;
+                    return _U.eq(_p68,grp) ? A6(setGroupPosition,answers,_p69,_p68,_p67._1,{ctor: "_Tuple2",_0: _p67._2._0,_1: _p67._2._1},team) : answers;
+                 } else {
+                    break _v36_2;
+                 }
+            case "AnswerGroupBestThirds": return A5(setBestThirds$,answers,_p69,_p67._0,grp,team);
+            default: break _v36_2;}
+      } while (false);
+      return answers;
+   });
+   var setWinner = F4(function (answers,_p70,slot,homeOrAway) {
+      var _p71 = _p70;
+      var _p72 = _p71._1;
+      if (_p72.ctor === "AnswerBracket") {
+            var newBracket = A3($Bets$Types$Bracket.proceed,_p72._0,slot,homeOrAway);
+            var newAnswer = A2(_op["=>"],_p71._0,A2($Bets$Types.AnswerBracket,newBracket,_p72._1));
+            var newAnswers = A2(setAnswer,newAnswer,answers);
+            return newAnswers;
+         } else {
+            return answers;
+         }
+   });
+   return _elm.Bets.Types.Answers.values = {_op: _op
+                                           ,getAnswer: getAnswer
+                                           ,setTeam: setTeam
+                                           ,setMatchScore: setMatchScore
+                                           ,setTopscorer: setTopscorer
+                                           ,setParticipant: setParticipant
+                                           ,setMatchWinner: setMatchWinner
+                                           ,setWinner: setWinner
+                                           ,findGroupMatchAnswers: findGroupMatchAnswers
+                                           ,findGroupPositionAnswers: findGroupPositionAnswers
+                                           ,encode: encode
+                                           ,decode: decode};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Types = Elm.Bets.Types || {};
+Elm.Bets.Types.Candidates = Elm.Bets.Types.Candidates || {};
+Elm.Bets.Types.Candidates.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Types = _elm.Bets.Types || {};
+   _elm.Bets.Types.Candidates = _elm.Bets.Types.Candidates || {};
+   if (_elm.Bets.Types.Candidates.values) return _elm.Bets.Types.Candidates.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var free = function (_p0) {    var _p1 = _p0;return {ctor: "_Tuple3",_0: _p1._0,_1: _p1._1,_2: $Bets$Types.Free};};
+   var uniques = F2(function (found,tms) {
+      uniques: while (true) {
+         var _p2 = tms;
+         if (_p2.ctor === "::") {
+               var _p4 = _p2._0._1;
+               var _p3 = _p2._1;
+               if (A2($List.member,_p4,found)) {
+                     var _v2 = found,_v3 = _p3;
+                     found = _v2;
+                     tms = _v3;
+                     continue uniques;
+                  } else return A2($List._op["::"],{ctor: "_Tuple2",_0: _p2._0._0,_1: _p4},A2(uniques,A2($List._op["::"],_p4,found),_p3));
+            } else {
+               return _U.list([]);
+            }
+      }
+   });
+   var findTeams = F2(function (answers,grp) {
+      findTeams: while (true) {
+         var _p5 = answers;
+         if (_p5.ctor === "[]") {
+               return _U.list([]);
+            } else {
+               var _p9 = _p5._1;
+               var _p6 = _p5._0._1;
+               if (_p6.ctor === "AnswerGroupMatch" && _p6._1.ctor === "_Tuple4" && _p6._1._0.ctor === "_Tuple2" && _p6._1._1.ctor === "_Tuple2") {
+                     var _p8 = _p6._0;
+                     if (_U.eq(_p8,grp)) {
+                           var _p7 = {ctor: "_Tuple2",_0: _p6._1._0._1,_1: _p6._1._1._1};
+                           if (_p7._0.ctor === "Just") {
+                                 if (_p7._1.ctor === "Just") {
+                                       return A2($List._op["::"],
+                                       {ctor: "_Tuple2",_0: _p8,_1: _p7._0._0},
+                                       A2($List._op["::"],{ctor: "_Tuple2",_0: _p8,_1: _p7._1._0},A2(findTeams,_p9,grp)));
+                                    } else {
+                                       return A2($List._op["::"],{ctor: "_Tuple2",_0: _p8,_1: _p7._0._0},A2(findTeams,_p9,grp));
+                                    }
+                              } else {
+                                 if (_p7._1.ctor === "Just") {
+                                       return A2($List._op["::"],{ctor: "_Tuple2",_0: _p8,_1: _p7._1._0},A2(findTeams,_p9,grp));
+                                    } else {
+                                       var _v7 = _p9,_v8 = grp;
+                                       answers = _v7;
+                                       grp = _v8;
+                                       continue findTeams;
+                                    }
+                              }
+                        } else {
+                           var _v9 = _p9,_v10 = grp;
+                           answers = _v9;
+                           grp = _v10;
+                           continue findTeams;
+                        }
+                  } else {
+                     var _v11 = _p9,_v12 = grp;
+                     answers = _v11;
+                     grp = _v12;
+                     continue findTeams;
+                  }
+            }
+      }
+   });
+   var teams = F2(function (answers,group) {    return A2(uniques,_U.list([]),A2(findTeams,answers,group));});
+   var allThirds = function (answers) {
+      var isThird = function (_p10) {
+         var _p11 = _p10;
+         var _p12 = _p11._1;
+         if (_p12.ctor === "AnswerGroupPosition" && _p12._1.ctor === "Third" && _p12._2.ctor === "_Tuple2" && _p12._2._1.ctor === "Just") {
+               return $Maybe.Just({ctor: "_Tuple3",_0: _p12._0,_1: _p12._2._1._0,_2: $Bets$Types.Third});
+            } else {
+               return $Maybe.Nothing;
+            }
+      };
+      return A2($List.filterMap,isThird,answers);
+   };
+   var mergeCandidates = F2(function (cands,teams) {
+      var positionedTeams = A2($List.map,function (_p13) {    var _p14 = _p13;return _p14._1;},cands);
+      var notSelected = function (_p15) {    var _p16 = _p15;return $Basics.not(A2($List.member,_p16._1,positionedTeams));};
+      return A2($List.sortBy,
+      function (_p17) {
+         var _p18 = _p17;
+         return function (_) {
+            return _.teamName;
+         }(_p18._1);
+      },
+      A2($List.append,cands,A2($List.filter,notSelected,teams)));
+   });
+   var findCandidates = F3(function (answers,grp,pos) {
+      findCandidates: while (true) {
+         var groupPos = A2($Basics.flip,$List.member,_U.list([$Bets$Types.First,$Bets$Types.Second,$Bets$Types.Third]));
+         var _p19 = answers;
+         if (_p19.ctor === "[]") {
+               return _U.list([]);
+            } else {
+               var _p23 = _p19._1;
+               var _p20 = _p19._0._1;
+               if (_p20.ctor === "AnswerGroupPosition" && _p20._2.ctor === "_Tuple2" && _p20._2._1.ctor === "Just") {
+                     var _p22 = _p20._1;
+                     var _p21 = _p20._0;
+                     if (_U.eq(_p21,grp)) return A2($List._op["::"],{ctor: "_Tuple3",_0: _p21,_1: _p20._2._1._0,_2: _p22},A3(findCandidates,_p23,grp,_p22));
+                     else {
+                           var _v20 = _p23,_v21 = grp,_v22 = _p22;
+                           answers = _v20;
+                           grp = _v21;
+                           pos = _v22;
+                           continue findCandidates;
+                        }
+                  } else {
+                     var _v23 = _p23,_v24 = grp,_v25 = pos;
+                     answers = _v23;
+                     grp = _v24;
+                     pos = _v25;
+                     continue findCandidates;
+                  }
+            }
+      }
+   });
+   var candidates = F2(function (answers,_p24) {
+      var _p25 = _p24;
+      var _p26 = _p25._1;
+      switch (_p26.ctor)
+      {case "AnswerGroupPosition": var _p27 = _p26._0;
+           return A2(mergeCandidates,A3(findCandidates,answers,_p27,_p26._1),A2($List.map,free,A2(teams,answers,_p27)));
+         case "AnswerGroupBestThirds": var thirds = allThirds(answers);
+           var topThirds = A2($List.map,
+           function (_p28) {
+              var _p29 = _p28;
+              return {ctor: "_Tuple3",_0: _p29._0,_1: _p29._1,_2: $Bets$Types.TopThird};
+           },
+           _p26._0);
+           return A2(mergeCandidates,topThirds,thirds);
+         default: return _U.list([]);}
+   });
+   return _elm.Bets.Types.Candidates.values = {_op: _op
+                                              ,candidates: candidates
+                                              ,findCandidates: findCandidates
+                                              ,findTeams: findTeams
+                                              ,mergeCandidates: mergeCandidates};
+};
+Elm.Bets = Elm.Bets || {};
+Elm.Bets.Bet = Elm.Bets.Bet || {};
+Elm.Bets.Bet.make = function (_elm) {
+   "use strict";
+   _elm.Bets = _elm.Bets || {};
+   _elm.Bets.Bet = _elm.Bets.Bet || {};
+   if (_elm.Bets.Bet.values) return _elm.Bets.Bet.values;
+   var _U = Elm.Native.Utils.make(_elm),
+   $Basics = Elm.Basics.make(_elm),
+   $Bets$Json$Encode = Elm.Bets.Json.Encode.make(_elm),
+   $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Answers = Elm.Bets.Types.Answers.make(_elm),
+   $Bets$Types$Candidates = Elm.Bets.Types.Candidates.make(_elm),
+   $Debug = Elm.Debug.make(_elm),
+   $Json$Decode = Elm.Json.Decode.make(_elm),
+   $Json$Encode = Elm.Json.Encode.make(_elm),
+   $List = Elm.List.make(_elm),
+   $Maybe = Elm.Maybe.make(_elm),
+   $Result = Elm.Result.make(_elm),
+   $Signal = Elm.Signal.make(_elm);
+   var _op = {};
+   var decodeBet = A5($Json$Decode.object4,
+   $Bets$Types.Bet,
+   A2($Json$Decode._op[":="],"answers",$Bets$Types$Answers.decode),
+   A2($Json$Decode._op[":="],"betId",$Json$Decode.maybe($Json$Decode.$int)),
+   A2($Json$Decode._op[":="],"uuid",$Json$Decode.maybe($Json$Decode.string)),
+   A2($Json$Decode._op[":="],"active",$Json$Decode.bool));
+   var IncomingBet = function (a) {    return {bet: a};};
+   var decodeIncoming = A2($Json$Decode.object1,IncomingBet,A2($Json$Decode._op[":="],"bet",decodeBet));
+   var decode = A2($Json$Decode.map,function (x) {    return x.bet;},decodeIncoming);
+   var encode = function (bet) {
+      var betObject = $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "answers",_1: $Bets$Types$Answers.encode(bet.answers)}
+                                                  ,{ctor: "_Tuple2",_0: "betId",_1: $Bets$Json$Encode.mIntEnc(bet.betId)}
+                                                  ,{ctor: "_Tuple2",_0: "uuid",_1: $Bets$Json$Encode.mStrEnc(bet.uuid)}
+                                                  ,{ctor: "_Tuple2",_0: "active",_1: $Json$Encode.bool(bet.active)}]));
+      return $Json$Encode.object(_U.list([{ctor: "_Tuple2",_0: "bet",_1: betObject}]));
+   };
+   var newBet = F2(function (bet,newAnswers) {    return _U.update(bet,{answers: newAnswers});});
+   var setWinner = F4(function (bet,answer,slot,winner) {    return A2(newBet,bet,A4($Bets$Types$Answers.setWinner,bet.answers,answer,slot,winner));});
+   var setTeam = F4(function (bet,answer,group,team) {    return A2(newBet,bet,A4($Bets$Types$Answers.setTeam,bet.answers,answer,group,team));});
+   var setMatchScore = F3(function (bet,answer,score) {    return A2(newBet,bet,A3($Bets$Types$Answers.setMatchScore,bet.answers,answer,score));});
+   var setMatchWinner = F3(function (bet,answer,team) {    return A2(newBet,bet,A3($Bets$Types$Answers.setMatchWinner,bet.answers,answer,team));});
+   var setParticipant = F3(function (bet,answer,participant) {
+      return A2(newBet,bet,A3($Bets$Types$Answers.setParticipant,bet.answers,answer,participant));
+   });
+   var setTopscorer = F3(function (bet,answer,topscorer) {    return A2(newBet,bet,A3($Bets$Types$Answers.setTopscorer,bet.answers,answer,topscorer));});
+   var findGroupPositionAnswers = F2(function (group,bet) {    return A2($Bets$Types$Answers.findGroupPositionAnswers,group,bet.answers);});
+   var findGroupMatchAnswers = F2(function (group,bet) {    return A2($Bets$Types$Answers.findGroupMatchAnswers,group,bet.answers);});
+   var candidates = F2(function (bet,answer) {    return A2($Bets$Types$Candidates.candidates,bet.answers,answer);});
+   var getAnswer = F2(function (bet,answerId) {    return A2($Bets$Types$Answers.getAnswer,bet.answers,answerId);});
+   return _elm.Bets.Bet.values = {_op: _op
+                                 ,getAnswer: getAnswer
+                                 ,candidates: candidates
+                                 ,findGroupMatchAnswers: findGroupMatchAnswers
+                                 ,findGroupPositionAnswers: findGroupPositionAnswers
+                                 ,setWinner: setWinner
+                                 ,setTeam: setTeam
+                                 ,setMatchScore: setMatchScore
+                                 ,setMatchWinner: setMatchWinner
+                                 ,setParticipant: setParticipant
+                                 ,setTopscorer: setTopscorer
+                                 ,encode: encode
+                                 ,decode: decode
+                                 ,decodeBet: decodeBet};
+};
 Elm.Utils = Elm.Utils || {};
 Elm.Utils.Types = Elm.Utils.Types || {};
 Elm.Utils.Types.make = function (_elm) {
@@ -11153,81 +14387,269 @@ Elm.Main.make = function (_elm) {
    if (_elm.Main.values) return _elm.Main.values;
    var _U = Elm.Native.Utils.make(_elm),
    $Basics = Elm.Basics.make(_elm),
+   $Bets$Bet = Elm.Bets.Bet.make(_elm),
    $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Match = Elm.Bets.Types.Match.make(_elm),
+   $Bets$Types$Score = Elm.Bets.Types.Score.make(_elm),
+   $Bets$Types$Team = Elm.Bets.Types.Team.make(_elm),
    $Debug = Elm.Debug.make(_elm),
    $Dict = Elm.Dict.make(_elm),
    $Effects = Elm.Effects.make(_elm),
    $Html = Elm.Html.make(_elm),
    $Html$Attributes = Elm.Html.Attributes.make(_elm),
+   $Html$Events = Elm.Html.Events.make(_elm),
    $Http = Elm.Http.make(_elm),
    $Json$Decode = Elm.Json.Decode.make(_elm),
    $List = Elm.List.make(_elm),
+   $List$Extra = Elm.List.Extra.make(_elm),
    $Maybe = Elm.Maybe.make(_elm),
    $Result = Elm.Result.make(_elm),
    $Signal = Elm.Signal.make(_elm),
    $StartApp = Elm.StartApp.make(_elm),
+   $String = Elm.String.make(_elm),
    $Task = Elm.Task.make(_elm),
    $Utils$Types = Elm.Utils.Types.make(_elm);
    var _op = {};
+   var viewTeam = function (team) {
+      return A2($Html.div,
+      _U.list([$Html$Attributes.$class("team cell")]),
+      _U.list([A2($Html.span,_U.list([$Html$Attributes.$class("flag")]),_U.list([$Bets$Types$Team.flag(team)]))
+              ,A2($Html.br,_U.list([]),_U.list([]))
+              ,A2($Html.span,_U.list([$Html$Attributes.$class("team-name")]),_U.list([$Html.text($Bets$Types$Team.mdisplay(team))]))]));
+   };
    var decodeRounds = function () {
       var toRoundAndInt = function (_p0) {    var _p1 = _p0;return {ctor: "_Tuple2",_0: $Utils$Types.roundFromString(_p1._0),_1: _p1._1};};
       var toRoundAndInts = function (rStrIntList) {    return A2($List.map,toRoundAndInt,rStrIntList);};
       return A2($Json$Decode.map,toRoundAndInts,A2($Json$Decode.map,$Dict.toList,$Json$Decode.dict($Json$Decode.$int)));
    }();
-   var viewRankingLine = F2(function (address,ranking) {
+   var viewTopscorer = F2(function (address,ranking) {
+      return A2($Html.section,
+      _U.list([]),
+      _U.list([A2($Html.h1,_U.list([]),_U.list([$Html.text("Topscorer")]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("container")]),_U.list([$Html.text("Wordt aan gewerkt")]))]));
+   });
+   var viewBracket = F2(function (address,ranking) {
+      return A2($Html.section,
+      _U.list([]),
+      _U.list([A2($Html.h1,_U.list([]),_U.list([$Html.text("Schema")]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("container")]),_U.list([$Html.text("Wordt aan gewerkt")]))]));
+   });
+   var viewMatch = F2(function (address,_p2) {
+      var _p3 = _p2;
+      var _p4 = _p3._1;
+      if (_p4.ctor === "AnswerGroupMatch") {
+            var _p7 = _p4._1;
+            var displayScore = function (score) {
+               var aScore = A2($Maybe.withDefault,"_",A2($Maybe.map,$Basics.toString,$Bets$Types$Score.awayScore(score)));
+               var hScore = A2($Maybe.withDefault,"_",A2($Maybe.map,$Basics.toString,$Bets$Types$Score.homeScore(score)));
+               return $Html.text(A2($Basics._op["++"],hScore,A2($Basics._op["++"],"-",aScore)));
+            };
+            var scoreTxt = function () {
+               var _p5 = _p4._2;
+               if (_p5.ctor === "Just") {
+                     return displayScore(_p5._0);
+                  } else {
+                     return $Html.text("_-_");
+                  }
+            }();
+            var scoreView = A2($Html.div,_U.list([$Html$Attributes.$class("cell")]),_U.list([scoreTxt]));
+            var clr = function () {
+               var _p6 = _p4._3;
+               if (_p6.ctor === "Nothing") {
+                     return "border-tbd";
+                  } else {
+                     switch (_p6._0)
+                     {case 0: return "border-wrong";
+                        case 1: return "border-toto";
+                        case 3: return "border-score";
+                        default: return "border-perhaps";}
+                  }
+            }();
+            var cls = A2($Basics._op["++"],"cell xxl score container match ",clr);
+            var away = viewTeam($Bets$Types$Match.awayTeam(_p7));
+            var home = viewTeam($Bets$Types$Match.homeTeam(_p7));
+            return $Maybe.Just(A2($Html.div,_U.list([$Html$Attributes.$class(cls)]),_U.list([home,scoreView,away])));
+         } else {
+            return $Maybe.Nothing;
+         }
+   });
+   var viewMatches = F2(function (address,ranking) {
+      var answers = A2($List.sortBy,$Basics.fst,ranking.bet.answers);
+      return A2($Html.section,
+      _U.list([]),
+      _U.list([A2($Html.h1,_U.list([]),_U.list([$Html.text("Uitslagen")]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("container")]),A2($List.filterMap,viewMatch(address),answers))]));
+   });
+   var newModel = {rankings: _U.list([]),current: $Maybe.Nothing,err: $Maybe.Nothing};
+   var BackToRankings = {ctor: "BackToRankings"};
+   var viewTop = F2(function (address,ranking) {
+      return A2($Html.p,
+      _U.list([]),
+      _U.list([A2($Html.a,_U.list([$Html$Attributes.href("/voetbalpool"),$Html$Attributes.$class("button-like right")]),_U.list([$Html.text("home")]))
+              ,$Html.text(" / ")
+              ,A2($Html.span,
+              _U.list([$Html$Attributes.$class("button-like right clickable"),A2($Html$Events.onClick,address,BackToRankings)]),
+              _U.list([$Html.text("stand")]))
+              ,$Html.text(" / ")
+              ,A2($Html.span,_U.list([$Html$Attributes.$class("button-like right")]),_U.list([$Html.text(ranking.name)]))
+              ,$Html.text(" / ")]));
+   });
+   var viewRanking = F2(function (address,model) {
+      return A2($Html.section,
+      _U.list([]),
+      _U.list([A2(viewTop,address,model),A2(viewMatches,address,model),A2(viewBracket,address,model),A2(viewTopscorer,address,model)]));
+   });
+   var RankingReceived = function (a) {    return {ctor: "RankingReceived",_0: a};};
+   var SetCurrent = function (a) {    return {ctor: "SetCurrent",_0: a};};
+   var viewRankingLine = F2(function (address,_p8) {
+      var _p9 = _p8;
+      var mkRanking = function (ranking) {
+         return A2($Html.span,
+         _U.list([$Html$Attributes.$class("clickable"),A2($Html$Events.onClick,address,SetCurrent(ranking.uuid))]),
+         _U.list([$Html.text(ranking.name)]));
+      };
+      var players = A2($List.intersperse,$Html.text(", "),A2($List.map,mkRanking,_p9._1._1));
       return A2($Html.tr,
       _U.list([]),
-      _U.list([A2($Html.td,_U.list([$Html$Attributes.$class("pos")]),_U.list([$Html.text($Basics.toString(ranking.pos))]))
-              ,A2($Html.td,_U.list([$Html$Attributes.$class("name")]),_U.list([$Html.text(ranking.name)]))
-              ,A2($Html.td,_U.list([$Html$Attributes.$class("points")]),_U.list([$Html.text($Basics.toString(ranking.total))]))]));
+      _U.list([A2($Html.td,_U.list([$Html$Attributes.$class("pos")]),_U.list([$Html.text($Basics.toString(_p9._0))]))
+              ,A2($Html.td,_U.list([$Html$Attributes.$class("name")]),players)
+              ,A2($Html.td,_U.list([$Html$Attributes.$class("points")]),_U.list([$Html.text($Basics.toString(_p9._1._0))]))]));
+   });
+   var viewOverview = F2(function (address,rs) {
+      var homelink = A2($Html.p,
+      _U.list([]),
+      _U.list([A2($Html.a,_U.list([$Html$Attributes.href("/voetbalpool"),$Html$Attributes.$class("button-like right")]),_U.list([$Html.text("home")]))
+              ,$Html.text(" / ")
+              ,A2($Html.span,
+              _U.list([$Html$Attributes.$class("button-like right clickable"),A2($Html$Events.onClick,address,BackToRankings)]),
+              _U.list([$Html.text("stand")]))
+              ,$Html.text(" / ")]));
+      var rankingViewByPoints = function (_p10) {
+         var _p11 = _p10;
+         var _p12 = _p11._1._1;
+         var players = A2($String.join,", ",A2($List.map,function (_) {    return _.name;},_p12));
+         var hdr = A2($Html.p,
+         _U.list([]),
+         _U.list([A2($Html.strong,_U.list([]),_U.list([$Html.text($Basics.toString(_p11._0))]))
+                 ,$Html.text(A2($Basics._op["++"]," (",A2($Basics._op["++"],$Basics.toString(_p11._1._0),A2($Basics._op["++"]," ","punten): "))))
+                 ,$Html.text(players)]));
+         var no = $List.length(_p12);
+         var nOfPlayers = _U.eq(no,1) ? "" : A2($Basics._op["++"]," (",A2($Basics._op["++"],$Basics.toString(no)," deelnemers)"));
+         return A2($Html.section,_U.list([]),_U.list([A2($Html.p,_U.list([$Html$Attributes.$class("point-header")]),_U.list([hdr]))]));
+      };
+      var toPositions = F2(function (pos,prs) {
+         var _p13 = prs;
+         if (_p13.ctor === "::") {
+               var _p14 = _p13._0._1;
+               var nextPos = pos + $List.length(_p14);
+               return A2($List._op["::"],{ctor: "_Tuple2",_0: pos,_1: {ctor: "_Tuple2",_0: _p13._0._0,_1: _p14}},A2(toPositions,nextPos,_p13._1));
+            } else {
+               return _U.list([]);
+            }
+      });
+      var toPointRankingsTuple = function (rs) {
+         var _p15 = $List.head(rs);
+         if (_p15.ctor === "Just") {
+               return {ctor: "_Tuple2",_0: function (_) {    return _.total;}(_p15._0),_1: rs};
+            } else {
+               return {ctor: "_Tuple2",_0: -1,_1: rs};
+            }
+      };
+      var rankingsByPoints = A2(toPositions,
+      1,
+      A2($List.map,
+      toPointRankingsTuple,
+      A2($List$Extra.groupBy,F2(function (x,y) {    return _U.eq(function (_) {    return _.total;}(x),function (_) {    return _.total;}(y));}),rs)));
+      var rankingsViewsByPoints = A2($Html.section,_U.list([]),A2($List.map,rankingViewByPoints,rankingsByPoints));
+      var rankingsViewsByPoints2 = A2($Html.table,_U.list([]),A2($List.map,viewRankingLine(address),rankingsByPoints));
+      return A2($Html.div,_U.list([]),_U.list([homelink,A2($Html.h1,_U.list([]),_U.list([$Html.text("De stand")])),rankingsViewsByPoints2]));
    });
    var view = F2(function (address,model) {
-      var rankings = A2($List.map,viewRankingLine(address),model.rankings);
-      return A2($Html.table,_U.list([]),rankings);
+      var _p16 = model.current;
+      if (_p16.ctor === "Nothing") {
+            return A2(viewOverview,address,model.rankings);
+         } else {
+            return A2(viewRanking,address,_p16._0);
+         }
    });
-   var newModel = {rankings: _U.list([])};
    var Failure = function (a) {    return {ctor: "Failure",_0: a};};
    var Receive = function (a) {    return {ctor: "Receive",_0: a};};
-   var FetchRankings = {ctor: "FetchRankings"};
-   var Model = function (a) {    return {rankings: a};};
-   var Ranking = F6(function (a,b,c,d,e,f) {    return {name: a,pos: b,rounds: c,topscorer: d,total: e,uuid: f};});
-   var decodeRanking = A7($Json$Decode.object6,
+   var FetchRankingSummary = {ctor: "FetchRankingSummary"};
+   var Model = F3(function (a,b,c) {    return {rankings: a,current: b,err: c};});
+   var Ranking = F7(function (a,b,c,d,e,f,g) {    return {name: a,pos: b,rounds: c,topscorer: d,total: e,uuid: f,bet: g};});
+   var decodeRanking = A8($Json$Decode.object7,
    Ranking,
    A2($Json$Decode._op[":="],"name",$Json$Decode.string),
    A2($Json$Decode._op[":="],"pos",$Json$Decode.$int),
    A2($Json$Decode._op[":="],"rounds",decodeRounds),
    A2($Json$Decode._op[":="],"topscorer",$Json$Decode.$int),
    A2($Json$Decode._op[":="],"total",$Json$Decode.$int),
-   A2($Json$Decode._op[":="],"uuid",$Json$Decode.string));
-   var decode = A2($Json$Decode.object1,Model,A2($Json$Decode._op[":="],"rankings",$Json$Decode.list(decodeRanking)));
-   var fetchRankings = F2(function (model,urlString) {
-      var request = A2($Task.map,function (resp) {    return Receive(resp);},A2($Http.get,decode,urlString));
+   A2($Json$Decode._op[":="],"uuid",$Json$Decode.string),
+   A2($Json$Decode._op[":="],"bet",$Bets$Bet.decodeBet));
+   var fetchRanking = F2(function (model,urlString) {
+      var request = A2($Task.map,function (resp) {    return RankingReceived(resp);},A2($Http.get,decodeRanking,urlString));
       var neverFailingRequest = A2($Task.onError,request,function (err) {    return $Task.succeed(Failure(err));});
       return {ctor: "_Tuple2",_0: model,_1: $Effects.task(neverFailingRequest)};
    });
-   var update = F2(function (action,model) {
-      var _p2 = action;
-      switch (_p2.ctor)
-      {case "FetchRankings": return A2(fetchRankings,model,"/app/rankings");
-         case "Receive": return {ctor: "_Tuple2",_0: _p2._0,_1: $Effects.none};
-         default: return {ctor: "_Tuple2",_0: model,_1: $Effects.none};}
+   var Rankings = function (a) {    return {rankings: a};};
+   var RankingSummary = F6(function (a,b,c,d,e,f) {    return {name: a,pos: b,rounds: c,topscorer: d,total: e,uuid: f};});
+   var decodeRankingSummary = A7($Json$Decode.object6,
+   RankingSummary,
+   A2($Json$Decode._op[":="],"name",$Json$Decode.string),
+   A2($Json$Decode._op[":="],"pos",$Json$Decode.$int),
+   A2($Json$Decode._op[":="],"rounds",decodeRounds),
+   A2($Json$Decode._op[":="],"topscorer",$Json$Decode.$int),
+   A2($Json$Decode._op[":="],"total",$Json$Decode.$int),
+   A2($Json$Decode._op[":="],"uuid",$Json$Decode.string));
+   var decode = A2($Json$Decode.object1,Rankings,A2($Json$Decode._op[":="],"rankings",$Json$Decode.list(decodeRankingSummary)));
+   var fetchRankingSummary = F2(function (model,urlString) {
+      var request = A2($Task.map,function (resp) {    return Receive(resp);},A2($Http.get,decode,urlString));
+      var neverFailingRequest = A2($Task.onError,request,function (err) {    return $Task.succeed(Failure(A2($Debug.log,"err",err)));});
+      return {ctor: "_Tuple2",_0: model,_1: $Effects.task(neverFailingRequest)};
    });
-   var app = $StartApp.start({init: A2(fetchRankings,newModel,"/app/rankings"),update: update,view: view,inputs: _U.list([])});
+   var update = F2(function (action,model) {
+      var _p17 = action;
+      switch (_p17.ctor)
+      {case "FetchRankingSummary": return A2(fetchRankingSummary,model,"/app/rankings");
+         case "Receive": return {ctor: "_Tuple2",_0: _U.update(model,{rankings: _p17._0.rankings}),_1: $Effects.none};
+         case "Failure": var err = A2($Debug.log,"err",_p17._0);
+           return {ctor: "_Tuple2",_0: _U.update(model,{err: $Maybe.Just(err)}),_1: $Effects.none};
+         case "SetCurrent": return A2(fetchRanking,model,A2($Basics._op["++"],"/app/rankings/",_p17._0));
+         case "RankingReceived": return {ctor: "_Tuple2",_0: _U.update(model,{current: $Maybe.Just(A2($Debug.log,"r",_p17._0))}),_1: $Effects.none};
+         default: return {ctor: "_Tuple2",_0: _U.update(model,{current: $Maybe.Nothing}),_1: $Effects.none};}
+   });
+   var app = $StartApp.start({init: A2(fetchRankingSummary,newModel,"/app/rankings"),update: update,view: view,inputs: _U.list([])});
    var main = app.html;
+   var tasks = Elm.Native.Task.make(_elm).performSignal("tasks",app.tasks);
    return _elm.Main.values = {_op: _op
+                             ,RankingSummary: RankingSummary
+                             ,Rankings: Rankings
                              ,Ranking: Ranking
                              ,Model: Model
-                             ,FetchRankings: FetchRankings
+                             ,FetchRankingSummary: FetchRankingSummary
                              ,Receive: Receive
                              ,Failure: Failure
+                             ,SetCurrent: SetCurrent
+                             ,RankingReceived: RankingReceived
+                             ,BackToRankings: BackToRankings
                              ,update: update
                              ,app: app
                              ,main: main
                              ,newModel: newModel
                              ,view: view
+                             ,viewOverview: viewOverview
                              ,viewRankingLine: viewRankingLine
+                             ,viewRanking: viewRanking
+                             ,viewTop: viewTop
+                             ,viewMatches: viewMatches
+                             ,viewMatch: viewMatch
+                             ,viewBracket: viewBracket
+                             ,viewTopscorer: viewTopscorer
                              ,decode: decode
+                             ,decodeRankingSummary: decodeRankingSummary
                              ,decodeRanking: decodeRanking
                              ,decodeRounds: decodeRounds
-                             ,fetchRankings: fetchRankings};
+                             ,fetchRankingSummary: fetchRankingSummary
+                             ,fetchRanking: fetchRanking
+                             ,viewTeam: viewTeam};
 };

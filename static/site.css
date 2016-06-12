@@ -212,8 +212,8 @@ h1 {
   font-weight:200;
 }
   strong {
-    font-weight:300;
-    color:#539D00;
+    font-weight:600;
+    color:#E64A19;
   }
 
 h2 {
@@ -349,6 +349,11 @@ section {
   margin: auto
 }
 
+.match {
+  background-color: rgba(240,240,240,1);
+  color: rgba(51,51,51,1);
+}
+
 #home {
   margin: auto;
   margin-right: 2px;
@@ -399,8 +404,10 @@ section {
 }
 
 
-.xxl {
+.xxxl {
     height: 250px; width: 100%}
+.xxl {
+    height: 96px; width: 42%}
 .xl {
     height: 76px; width: 40%}
 .l {
@@ -458,19 +465,82 @@ section {
 .selected {
   background-color: #009688; color: #fff; }
 
+/* #00796B #5D4037 */
+
+.border-score {
+  border-color: #00796B;
+  border-radius: 3px;
+  border-width: 2px;
+  border-style: solid;
+}
+
+.border-wrong {
+  border-color: #E91E63;
+  border-radius: 3px;
+  border-width: 2px;
+  border-style: solid;
+}
+
+.border-toto {
+  border-color: #00796B;
+  border-radius: 3px;
+  border-width: 2px;
+  border-style: dashed;
+}
+
+.border-perhaps {
+  border-color: #607D8B;
+  border-radius: 3px;
+  border-width: 2px;
+  border-style: solid outset;
+}
+
+
+.border-tbd {
+  border-color: rgba(240,240,240,1);
+  border-radius: 3px;
+  border-width: 2px;
+  border-style: solid;
+}
+
+
 
 table {
   width: 100%;
 }
 
-td > .pos  {
-  width: 20%;
+tr {
+  width: 100%;
 }
 
-td > .name  {
-  width: 60%;
+tr > td {
+  padding-bottom: 0.5em;
 }
 
-td > .points  {
-  width: 20%;
+td.pos  {
+  width: 5%;
+  color: #E64A19;
+  font-weight: 600;
+  vertical-align: top;
+  text-align: right;
+}
+
+td.name  {
+  width: 90%;
+  padding-left: 0.5em;
+  vertical-align: top;
+}
+
+td.points  {
+  width: 5%;
+  font-weight: 600;
+  text-align: right;
+  color: #795548;
+  vertical-align: top;
+}
+
+.date {
+  font-size: 12px;
+  text-align: right;
+  color : #795548;
 }

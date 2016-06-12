@@ -11,6 +11,7 @@ module Bets.Bet
   , setTopscorer
   , encode
   , decode
+  , decodeBet
   ) where
 
 import Bets.Types exposing (..)
