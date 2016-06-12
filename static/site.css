@@ -264,6 +264,15 @@ section {
   margin: 20px 0px 20px 0px;
 }
 
+#schema {
+  margin: 0;
+}
+
+#schema > .row {
+  margin: 0;
+  height: 118px;
+}
+
 .row {
   display: flex;
   flex-direction: row;
@@ -298,8 +307,9 @@ section {
   flex-grow: 1;
   flex: none;
   align-self: flex-start;
-  padding: 10px;
-  margin: 10px
+  padding: 0px;
+  margin: 10px;
+  text-align: center;
 }
 
 .cell2 {
@@ -375,6 +385,10 @@ section {
 }
 
 .team-name {
+  font-weight: normal;
+}
+
+.score-text {
   font-weight: bolder;
 }
 
@@ -448,6 +462,9 @@ section {
   margin: 1px
 }
 
+.topscorer {
+  padding : 15px;
+}
 /* #00796B #5D4037 */
 .potential {
   background-color: #D7CCC8; color: #607D8B; }

@@ -14,10 +14,12 @@ import Http
 -- import Json.Encode
 import Json.Decode exposing (Decoder, (:=), object2, object4, andThen, maybe)
 
-import Bets.Types exposing (Round(..), Answer, AnswerT(..), Team)
+import Bets.Types exposing (Bet, Round(..), Answer, AnswerT(..), Team, Bracket(..), HasQualified(..), Topscorer, Points)
 import Bets.Types.Match as M
 import Bets.Types.Score as S
 import Bets.Types.Team as T
+import Bets.Types.Bracket as B
+import Bets.Bet
 
 import Utils.Types exposing (roundFromString)
 
@@ -197,7 +199,7 @@ viewOverview address rs =
         , text " / "
         ]
   in
-    div []
+    Html.section []
       [ homelink
       , Html.h1 [] [text "De stand"]
       , rankingsViewsByPoints2
@@ -305,7 +307,7 @@ viewMatch address (_, answer) =
               text "_-_"
 
         scoreView =
-          div [class "cell"] [scoreTxt]
+          div [class "cell score-text"] [scoreTxt]
 
       in
         div [class (cls)]
@@ -320,17 +322,186 @@ viewMatch address (_, answer) =
 -- AnswerGroupMatch Group Match (Maybe Score) Points
 viewBracket : Signal.Address Action -> Ranking -> Html
 viewBracket address ranking =
-  Html.section []
-   [ Html.h1 [] [text "Schema"]
-   , Html.div [class "container"] [text "Wordt aan gewerkt"]
-   ]
+  let
+    mAnswer =
+      Bets.Bet.getAnswer ranking.bet "br"
+  in
+    case mAnswer of
+      Just ((answerId, AnswerBracket bracket _) as answer)->
+        Html.section []
+         [ Html.h1 [] [text "Schema"]
+         , viewBracket' address ranking.bet bracket
+         ]
+      _ ->
+        Html.section [] [text "O jee, daar ging iets niet helemaal goed..."]
+
+
+
+viewBracket' : Signal.Address Action -> Bet -> Bracket -> Html
+viewBracket' address bet bracket =
+  {-
+    mn37 = MatchNode "m37" None tnra tnrc -- "2016/06/15 15:00" saintetienne (Just "W37")
+    mn38 = MatchNode "m38" None tnwb tnt2 -- "2016/06/15 15:00" paris (Just "W38")
+    mn39 = MatchNode "m39" None tnwd tnt4 -- "2016/06/15 15:00" lens (Just "W39")
+    mn40 = MatchNode "m40" None tnwa tnt1 -- "2016/06/15 15:00" lyon (Just "W40")
+    mn41 = MatchNode "m41" None tnwc tnt3 -- "2016/06/15 15:00" lille (Just "W41")
+    mn42 = MatchNode "m42" None tnwf tnre -- "2016/06/15 15:00" toulouse (Just "W42")
+    mn43 = MatchNode "m43" None tnwe tnrd -- "2016/06/15 15:00" saintdenis (Just "W43")
+    mn44 = MatchNode "m44" None tnrb tnrf -- "2016/06/15 15:00" nice (Just "W44")
+
+    mn45 = MatchNode "m45" None mn37 mn39 -- "2016/06/15 15:00" marseille (Just "W45")
+    mn46 = MatchNode "m46" None mn38 mn42 --  "2016/06/15 15:00" lille (Just "W46")
+    mn47 = MatchNode "m47" None mn41 mn43 -- "2016/06/15 15:00" bordeaux (Just "W47")
+    mn48 = MatchNode "m48" None mn40 mn44 -- "2016/06/15 15:00" saintdenis (Just "W48")
+
+    mn49 = MatchNode "m49" None mn45 mn46 -- "2016/06/15 15:00" lyon (Just "W49")
+    mn50 = MatchNode "m50" None mn47 mn48 -- "2016/06/15 15:00" marseille (Just "W50")
+
+    mn51 = MatchNode "m51" None mn49 mn50 -- "2016/06/15 15:00" saintdenis Nothing
+  -}
+  let
+    v = viewMatchWinner address bet
+
+    final = B.get bracket "m51"
+
+    m51 = v <| B.get bracket "m51"
+    m50 = v <| B.get bracket "m50"
+    m49 = v <| B.get bracket "m49"
+    m48 = v <| B.get bracket "m48"
+    m47 = v <| B.get bracket "m47"
+    m46 = v <| B.get bracket "m46"
+    m45 = v <| B.get bracket "m45"
+    m44 = v <| B.get bracket "m44"
+    m43 = v <| B.get bracket "m43"
+    m42 = v <| B.get bracket "m42"
+    m41 = v <| B.get bracket "m41"
+    m40 = v <| B.get bracket "m40"
+    m39 = v <| B.get bracket "m39"
+    m38 = v <| B.get bracket "m38"
+    m37 = v <| B.get bracket "m37"
+
+
+    champBtn = mkButtonChamp final
+
+    champion =
+      Html.div [class "cell2 m irrelevant"]
+        [ Html.div [class "container centered"] [champBtn]
+        ]
+
+  in
+    section [Html.Attributes.id "schema"]
+      [ Html.div [class "row justified"] [ m37, m39, m38, m42]
+      , Html.div [class "row spaced"]      [ m45, m46]
+      , Html.div [class "row spaced"]        [ m49]
+      , Html.div [class "row rightside"]     [ m51, champion]
+      , Html.div [class "row spaced"]        [ m50]
+      , Html.div [class "row spaced"]      [ m47, m48 ]
+      , Html.div [class "row justified"] [ m41, m43, m40, m44 ]
+      ]
+
+
+
+viewMatchWinner : Signal.Address Action -> Bet -> Maybe Bracket -> Html
+viewMatchWinner address bet mBracket =
+
+  case mBracket of
+
+    Just (MatchNode slot winner home away rd hasQ ) ->
+      let
+
+        homeButton =
+          mkButton address hasQ home
+
+        awayButton =
+          mkButton address hasQ away
+
+        dash =
+          text " - "
+
+      in
+        Html.div [class "cell2 m irrelevant"]
+          [ Html.div [class "container centered"] [homeButton, awayButton]
+          ]
+
+    _ ->
+      Html.p [] []
+
+
+mkButton : Signal.Address Action -> HasQualified -> Bracket ->  Html
+mkButton address hasQualified bracket =
+  let
+    clr =
+      case hasQualified of
+        In ->
+          "active"
+        Out ->
+          "wrong"
+        TBD ->
+          "match"
+
+    cls =
+      String.join " " [ "xl", "cell2", clr]
+
+  in
+
+    Html.div [class cls]
+      [viewTeam (B.qualifier bracket)]
+
+mkButtonChamp : Maybe Bracket ->  Html
+mkButtonChamp mBracket =
+  let
+    mTeam =
+      mBracket `Maybe.andThen` B.winner
+
+    clr =
+      case mTeam of
+        Just t ->
+          "match"
+        Nothing ->
+          "wrong"
+
+    cls =
+      String.join " " [ "xl", "cell2", clr]
+
+    attrs =
+      []
+  in
+    -- viewTeam mTeam
+    Html.div [class cls]
+      [viewTeam mTeam]
+
+-- =====================
+-- type alias Topscorer = (Maybe String, Maybe Team)
 
 viewTopscorer : Signal.Address Action -> Ranking -> Html
 viewTopscorer address ranking =
-  Html.section []
-   [ Html.h1 [] [text "Topscorer"]
-   , Html.div [class "container"] [text "Wordt aan gewerkt"]
-   ]
+  let
+    mAnswer =
+      Bets.Bet.getAnswer ranking.bet "ts"
+  in
+    case mAnswer of
+      Just ((answerId, AnswerTopscorer topscorer points) as answer)->
+        Html.section []
+          [ Html.h1 [] [text "Topscorer"]
+          , Html.div [class "container left"]
+            [ viewTopscorer' address topscorer points ]
+          ]
+      _ ->
+        Html.section [] [text "O jee, daar ging iets niet helemaal goed..."]
+
+viewTopscorer' : Signal.Address Action -> Topscorer -> Points -> Html
+viewTopscorer' address topscorer points =
+  case topscorer of
+    (Just name, Just team) ->
+      div [class "topscorer cell match xxl"]
+        [ span [ class "flag" ] [T.flag (Just team)]
+        , Html.br [] []
+        , span [ class "team-name"] [text name]
+        ]
+    _ ->
+      Html.section [] [text "O jee, daar ging iets niet helemaal goed..."]
+
+
 
 
 -- Json

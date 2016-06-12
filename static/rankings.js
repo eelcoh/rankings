@@ -14389,6 +14389,7 @@ Elm.Main.make = function (_elm) {
    $Basics = Elm.Basics.make(_elm),
    $Bets$Bet = Elm.Bets.Bet.make(_elm),
    $Bets$Types = Elm.Bets.Types.make(_elm),
+   $Bets$Types$Bracket = Elm.Bets.Types.Bracket.make(_elm),
    $Bets$Types$Match = Elm.Bets.Types.Match.make(_elm),
    $Bets$Types$Score = Elm.Bets.Types.Score.make(_elm),
    $Bets$Types$Team = Elm.Bets.Types.Team.make(_elm),
@@ -14422,43 +14423,124 @@ Elm.Main.make = function (_elm) {
       var toRoundAndInts = function (rStrIntList) {    return A2($List.map,toRoundAndInt,rStrIntList);};
       return A2($Json$Decode.map,toRoundAndInts,A2($Json$Decode.map,$Dict.toList,$Json$Decode.dict($Json$Decode.$int)));
    }();
+   var viewTopscorer$ = F3(function (address,topscorer,points) {
+      var _p2 = topscorer;
+      if (_p2.ctor === "_Tuple2" && _p2._0.ctor === "Just" && _p2._1.ctor === "Just") {
+            return A2($Html.div,
+            _U.list([$Html$Attributes.$class("topscorer cell match xxl")]),
+            _U.list([A2($Html.span,_U.list([$Html$Attributes.$class("flag")]),_U.list([$Bets$Types$Team.flag($Maybe.Just(_p2._1._0))]))
+                    ,A2($Html.br,_U.list([]),_U.list([]))
+                    ,A2($Html.span,_U.list([$Html$Attributes.$class("team-name")]),_U.list([$Html.text(_p2._0._0)]))]));
+         } else {
+            return A2($Html.section,_U.list([]),_U.list([$Html.text("O jee, daar ging iets niet helemaal goed...")]));
+         }
+   });
    var viewTopscorer = F2(function (address,ranking) {
+      var mAnswer = A2($Bets$Bet.getAnswer,ranking.bet,"ts");
+      var _p3 = mAnswer;
+      if (_p3.ctor === "Just" && _p3._0.ctor === "_Tuple2" && _p3._0._1.ctor === "AnswerTopscorer") {
+            return A2($Html.section,
+            _U.list([]),
+            _U.list([A2($Html.h1,_U.list([]),_U.list([$Html.text("Topscorer")]))
+                    ,A2($Html.div,_U.list([$Html$Attributes.$class("container left")]),_U.list([A3(viewTopscorer$,address,_p3._0._1._0,_p3._0._1._1)]))]));
+         } else {
+            return A2($Html.section,_U.list([]),_U.list([$Html.text("O jee, daar ging iets niet helemaal goed...")]));
+         }
+   });
+   var mkButtonChamp = function (mBracket) {
+      var attrs = _U.list([]);
+      var mTeam = A2($Maybe.andThen,mBracket,$Bets$Types$Bracket.winner);
+      var clr = function () {    var _p4 = mTeam;if (_p4.ctor === "Just") {    return "match";} else {    return "wrong";}}();
+      var cls = A2($String.join," ",_U.list(["xl","cell2",clr]));
+      return A2($Html.div,_U.list([$Html$Attributes.$class(cls)]),_U.list([viewTeam(mTeam)]));
+   };
+   var mkButton = F3(function (address,hasQualified,bracket) {
+      var clr = function () {    var _p5 = hasQualified;switch (_p5.ctor) {case "In": return "active";case "Out": return "wrong";default: return "match";}}();
+      var cls = A2($String.join," ",_U.list(["xl","cell2",clr]));
+      return A2($Html.div,_U.list([$Html$Attributes.$class(cls)]),_U.list([viewTeam($Bets$Types$Bracket.qualifier(bracket))]));
+   });
+   var viewMatchWinner = F3(function (address,bet,mBracket) {
+      var _p6 = mBracket;
+      if (_p6.ctor === "Just" && _p6._0.ctor === "MatchNode") {
+            var _p7 = _p6._0._5;
+            var dash = $Html.text(" - ");
+            var awayButton = A3(mkButton,address,_p7,_p6._0._3);
+            var homeButton = A3(mkButton,address,_p7,_p6._0._2);
+            return A2($Html.div,
+            _U.list([$Html$Attributes.$class("cell2 m irrelevant")]),
+            _U.list([A2($Html.div,_U.list([$Html$Attributes.$class("container centered")]),_U.list([homeButton,awayButton]))]));
+         } else {
+            return A2($Html.p,_U.list([]),_U.list([]));
+         }
+   });
+   var viewBracket$ = F3(function (address,bet,bracket) {
+      var $final = A2($Bets$Types$Bracket.get,bracket,"m51");
+      var champBtn = mkButtonChamp($final);
+      var champion = A2($Html.div,
+      _U.list([$Html$Attributes.$class("cell2 m irrelevant")]),
+      _U.list([A2($Html.div,_U.list([$Html$Attributes.$class("container centered")]),_U.list([champBtn]))]));
+      var v = A2(viewMatchWinner,address,bet);
+      var m51 = v(A2($Bets$Types$Bracket.get,bracket,"m51"));
+      var m50 = v(A2($Bets$Types$Bracket.get,bracket,"m50"));
+      var m49 = v(A2($Bets$Types$Bracket.get,bracket,"m49"));
+      var m48 = v(A2($Bets$Types$Bracket.get,bracket,"m48"));
+      var m47 = v(A2($Bets$Types$Bracket.get,bracket,"m47"));
+      var m46 = v(A2($Bets$Types$Bracket.get,bracket,"m46"));
+      var m45 = v(A2($Bets$Types$Bracket.get,bracket,"m45"));
+      var m44 = v(A2($Bets$Types$Bracket.get,bracket,"m44"));
+      var m43 = v(A2($Bets$Types$Bracket.get,bracket,"m43"));
+      var m42 = v(A2($Bets$Types$Bracket.get,bracket,"m42"));
+      var m41 = v(A2($Bets$Types$Bracket.get,bracket,"m41"));
+      var m40 = v(A2($Bets$Types$Bracket.get,bracket,"m40"));
+      var m39 = v(A2($Bets$Types$Bracket.get,bracket,"m39"));
+      var m38 = v(A2($Bets$Types$Bracket.get,bracket,"m38"));
+      var m37 = v(A2($Bets$Types$Bracket.get,bracket,"m37"));
       return A2($Html.section,
-      _U.list([]),
-      _U.list([A2($Html.h1,_U.list([]),_U.list([$Html.text("Topscorer")]))
-              ,A2($Html.div,_U.list([$Html$Attributes.$class("container")]),_U.list([$Html.text("Wordt aan gewerkt")]))]));
+      _U.list([$Html$Attributes.id("schema")]),
+      _U.list([A2($Html.div,_U.list([$Html$Attributes.$class("row justified")]),_U.list([m37,m39,m38,m42]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("row spaced")]),_U.list([m45,m46]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("row spaced")]),_U.list([m49]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("row rightside")]),_U.list([m51,champion]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("row spaced")]),_U.list([m50]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("row spaced")]),_U.list([m47,m48]))
+              ,A2($Html.div,_U.list([$Html$Attributes.$class("row justified")]),_U.list([m41,m43,m40,m44]))]));
    });
    var viewBracket = F2(function (address,ranking) {
-      return A2($Html.section,
-      _U.list([]),
-      _U.list([A2($Html.h1,_U.list([]),_U.list([$Html.text("Schema")]))
-              ,A2($Html.div,_U.list([$Html$Attributes.$class("container")]),_U.list([$Html.text("Wordt aan gewerkt")]))]));
+      var mAnswer = A2($Bets$Bet.getAnswer,ranking.bet,"br");
+      var _p8 = mAnswer;
+      if (_p8.ctor === "Just" && _p8._0.ctor === "_Tuple2" && _p8._0._1.ctor === "AnswerBracket") {
+            return A2($Html.section,
+            _U.list([]),
+            _U.list([A2($Html.h1,_U.list([]),_U.list([$Html.text("Schema")])),A3(viewBracket$,address,ranking.bet,_p8._0._1._0)]));
+         } else {
+            return A2($Html.section,_U.list([]),_U.list([$Html.text("O jee, daar ging iets niet helemaal goed...")]));
+         }
    });
-   var viewMatch = F2(function (address,_p2) {
-      var _p3 = _p2;
-      var _p4 = _p3._1;
-      if (_p4.ctor === "AnswerGroupMatch") {
-            var _p7 = _p4._1;
+   var viewMatch = F2(function (address,_p9) {
+      var _p10 = _p9;
+      var _p11 = _p10._1;
+      if (_p11.ctor === "AnswerGroupMatch") {
+            var _p14 = _p11._1;
             var displayScore = function (score) {
                var aScore = A2($Maybe.withDefault,"_",A2($Maybe.map,$Basics.toString,$Bets$Types$Score.awayScore(score)));
                var hScore = A2($Maybe.withDefault,"_",A2($Maybe.map,$Basics.toString,$Bets$Types$Score.homeScore(score)));
                return $Html.text(A2($Basics._op["++"],hScore,A2($Basics._op["++"],"-",aScore)));
             };
             var scoreTxt = function () {
-               var _p5 = _p4._2;
-               if (_p5.ctor === "Just") {
-                     return displayScore(_p5._0);
+               var _p12 = _p11._2;
+               if (_p12.ctor === "Just") {
+                     return displayScore(_p12._0);
                   } else {
                      return $Html.text("_-_");
                   }
             }();
-            var scoreView = A2($Html.div,_U.list([$Html$Attributes.$class("cell")]),_U.list([scoreTxt]));
+            var scoreView = A2($Html.div,_U.list([$Html$Attributes.$class("cell score-text")]),_U.list([scoreTxt]));
             var clr = function () {
-               var _p6 = _p4._3;
-               if (_p6.ctor === "Nothing") {
+               var _p13 = _p11._3;
+               if (_p13.ctor === "Nothing") {
                      return "border-tbd";
                   } else {
-                     switch (_p6._0)
+                     switch (_p13._0)
                      {case 0: return "border-wrong";
                         case 1: return "border-toto";
                         case 3: return "border-score";
@@ -14466,8 +14548,8 @@ Elm.Main.make = function (_elm) {
                   }
             }();
             var cls = A2($Basics._op["++"],"cell xxl score container match ",clr);
-            var away = viewTeam($Bets$Types$Match.awayTeam(_p7));
-            var home = viewTeam($Bets$Types$Match.homeTeam(_p7));
+            var away = viewTeam($Bets$Types$Match.awayTeam(_p14));
+            var home = viewTeam($Bets$Types$Match.homeTeam(_p14));
             return $Maybe.Just(A2($Html.div,_U.list([$Html$Attributes.$class(cls)]),_U.list([home,scoreView,away])));
          } else {
             return $Maybe.Nothing;
@@ -14501,19 +14583,19 @@ Elm.Main.make = function (_elm) {
    });
    var RankingReceived = function (a) {    return {ctor: "RankingReceived",_0: a};};
    var SetCurrent = function (a) {    return {ctor: "SetCurrent",_0: a};};
-   var viewRankingLine = F2(function (address,_p8) {
-      var _p9 = _p8;
+   var viewRankingLine = F2(function (address,_p15) {
+      var _p16 = _p15;
       var mkRanking = function (ranking) {
          return A2($Html.span,
          _U.list([$Html$Attributes.$class("clickable"),A2($Html$Events.onClick,address,SetCurrent(ranking.uuid))]),
          _U.list([$Html.text(ranking.name)]));
       };
-      var players = A2($List.intersperse,$Html.text(", "),A2($List.map,mkRanking,_p9._1._1));
+      var players = A2($List.intersperse,$Html.text(", "),A2($List.map,mkRanking,_p16._1._1));
       return A2($Html.tr,
       _U.list([]),
-      _U.list([A2($Html.td,_U.list([$Html$Attributes.$class("pos")]),_U.list([$Html.text($Basics.toString(_p9._0))]))
+      _U.list([A2($Html.td,_U.list([$Html$Attributes.$class("pos")]),_U.list([$Html.text($Basics.toString(_p16._0))]))
               ,A2($Html.td,_U.list([$Html$Attributes.$class("name")]),players)
-              ,A2($Html.td,_U.list([$Html$Attributes.$class("points")]),_U.list([$Html.text($Basics.toString(_p9._1._0))]))]));
+              ,A2($Html.td,_U.list([$Html$Attributes.$class("points")]),_U.list([$Html.text($Basics.toString(_p16._1._0))]))]));
    });
    var viewOverview = F2(function (address,rs) {
       var homelink = A2($Html.p,
@@ -14524,33 +14606,33 @@ Elm.Main.make = function (_elm) {
               _U.list([$Html$Attributes.$class("button-like right clickable"),A2($Html$Events.onClick,address,BackToRankings)]),
               _U.list([$Html.text("stand")]))
               ,$Html.text(" / ")]));
-      var rankingViewByPoints = function (_p10) {
-         var _p11 = _p10;
-         var _p12 = _p11._1._1;
-         var players = A2($String.join,", ",A2($List.map,function (_) {    return _.name;},_p12));
+      var rankingViewByPoints = function (_p17) {
+         var _p18 = _p17;
+         var _p19 = _p18._1._1;
+         var players = A2($String.join,", ",A2($List.map,function (_) {    return _.name;},_p19));
          var hdr = A2($Html.p,
          _U.list([]),
-         _U.list([A2($Html.strong,_U.list([]),_U.list([$Html.text($Basics.toString(_p11._0))]))
-                 ,$Html.text(A2($Basics._op["++"]," (",A2($Basics._op["++"],$Basics.toString(_p11._1._0),A2($Basics._op["++"]," ","punten): "))))
+         _U.list([A2($Html.strong,_U.list([]),_U.list([$Html.text($Basics.toString(_p18._0))]))
+                 ,$Html.text(A2($Basics._op["++"]," (",A2($Basics._op["++"],$Basics.toString(_p18._1._0),A2($Basics._op["++"]," ","punten): "))))
                  ,$Html.text(players)]));
-         var no = $List.length(_p12);
+         var no = $List.length(_p19);
          var nOfPlayers = _U.eq(no,1) ? "" : A2($Basics._op["++"]," (",A2($Basics._op["++"],$Basics.toString(no)," deelnemers)"));
          return A2($Html.section,_U.list([]),_U.list([A2($Html.p,_U.list([$Html$Attributes.$class("point-header")]),_U.list([hdr]))]));
       };
       var toPositions = F2(function (pos,prs) {
-         var _p13 = prs;
-         if (_p13.ctor === "::") {
-               var _p14 = _p13._0._1;
-               var nextPos = pos + $List.length(_p14);
-               return A2($List._op["::"],{ctor: "_Tuple2",_0: pos,_1: {ctor: "_Tuple2",_0: _p13._0._0,_1: _p14}},A2(toPositions,nextPos,_p13._1));
+         var _p20 = prs;
+         if (_p20.ctor === "::") {
+               var _p21 = _p20._0._1;
+               var nextPos = pos + $List.length(_p21);
+               return A2($List._op["::"],{ctor: "_Tuple2",_0: pos,_1: {ctor: "_Tuple2",_0: _p20._0._0,_1: _p21}},A2(toPositions,nextPos,_p20._1));
             } else {
                return _U.list([]);
             }
       });
       var toPointRankingsTuple = function (rs) {
-         var _p15 = $List.head(rs);
-         if (_p15.ctor === "Just") {
-               return {ctor: "_Tuple2",_0: function (_) {    return _.total;}(_p15._0),_1: rs};
+         var _p22 = $List.head(rs);
+         if (_p22.ctor === "Just") {
+               return {ctor: "_Tuple2",_0: function (_) {    return _.total;}(_p22._0),_1: rs};
             } else {
                return {ctor: "_Tuple2",_0: -1,_1: rs};
             }
@@ -14562,14 +14644,14 @@ Elm.Main.make = function (_elm) {
       A2($List$Extra.groupBy,F2(function (x,y) {    return _U.eq(function (_) {    return _.total;}(x),function (_) {    return _.total;}(y));}),rs)));
       var rankingsViewsByPoints = A2($Html.section,_U.list([]),A2($List.map,rankingViewByPoints,rankingsByPoints));
       var rankingsViewsByPoints2 = A2($Html.table,_U.list([]),A2($List.map,viewRankingLine(address),rankingsByPoints));
-      return A2($Html.div,_U.list([]),_U.list([homelink,A2($Html.h1,_U.list([]),_U.list([$Html.text("De stand")])),rankingsViewsByPoints2]));
+      return A2($Html.section,_U.list([]),_U.list([homelink,A2($Html.h1,_U.list([]),_U.list([$Html.text("De stand")])),rankingsViewsByPoints2]));
    });
    var view = F2(function (address,model) {
-      var _p16 = model.current;
-      if (_p16.ctor === "Nothing") {
+      var _p23 = model.current;
+      if (_p23.ctor === "Nothing") {
             return A2(viewOverview,address,model.rankings);
          } else {
-            return A2(viewRanking,address,_p16._0);
+            return A2(viewRanking,address,_p23._0);
          }
    });
    var Failure = function (a) {    return {ctor: "Failure",_0: a};};
@@ -14608,14 +14690,14 @@ Elm.Main.make = function (_elm) {
       return {ctor: "_Tuple2",_0: model,_1: $Effects.task(neverFailingRequest)};
    });
    var update = F2(function (action,model) {
-      var _p17 = action;
-      switch (_p17.ctor)
+      var _p24 = action;
+      switch (_p24.ctor)
       {case "FetchRankingSummary": return A2(fetchRankingSummary,model,"/app/rankings");
-         case "Receive": return {ctor: "_Tuple2",_0: _U.update(model,{rankings: _p17._0.rankings}),_1: $Effects.none};
-         case "Failure": var err = A2($Debug.log,"err",_p17._0);
+         case "Receive": return {ctor: "_Tuple2",_0: _U.update(model,{rankings: _p24._0.rankings}),_1: $Effects.none};
+         case "Failure": var err = A2($Debug.log,"err",_p24._0);
            return {ctor: "_Tuple2",_0: _U.update(model,{err: $Maybe.Just(err)}),_1: $Effects.none};
-         case "SetCurrent": return A2(fetchRanking,model,A2($Basics._op["++"],"/app/rankings/",_p17._0));
-         case "RankingReceived": return {ctor: "_Tuple2",_0: _U.update(model,{current: $Maybe.Just(A2($Debug.log,"r",_p17._0))}),_1: $Effects.none};
+         case "SetCurrent": return A2(fetchRanking,model,A2($Basics._op["++"],"/app/rankings/",_p24._0));
+         case "RankingReceived": return {ctor: "_Tuple2",_0: _U.update(model,{current: $Maybe.Just(A2($Debug.log,"r",_p24._0))}),_1: $Effects.none};
          default: return {ctor: "_Tuple2",_0: _U.update(model,{current: $Maybe.Nothing}),_1: $Effects.none};}
    });
    var app = $StartApp.start({init: A2(fetchRankingSummary,newModel,"/app/rankings"),update: update,view: view,inputs: _U.list([])});
@@ -14644,7 +14726,12 @@ Elm.Main.make = function (_elm) {
                              ,viewMatches: viewMatches
                              ,viewMatch: viewMatch
                              ,viewBracket: viewBracket
+                             ,viewBracket$: viewBracket$
+                             ,viewMatchWinner: viewMatchWinner
+                             ,mkButton: mkButton
+                             ,mkButtonChamp: mkButtonChamp
                              ,viewTopscorer: viewTopscorer
+                             ,viewTopscorer$: viewTopscorer$
                              ,decode: decode
                              ,decodeRankingSummary: decodeRankingSummary
                              ,decodeRanking: decodeRanking
