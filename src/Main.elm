@@ -1,7 +1,6 @@
-module Main (..) where
+module Main exposing (..)
 
-import Effects exposing (Effects, Never)
-import StartApp
+import Html.App as Html
 
 import Html exposing (Html, div, span, button, text, textarea, input, section, table, td, tr, th)
 import Html.Events exposing (onClick)
@@ -9,9 +8,7 @@ import Html.Attributes exposing (id, value, placeholder, class, href)
 
 import Task exposing (Task)
 import Http
--- import Date
 
--- import Json.Encode
 import Json.Decode exposing (Decoder, (:=), object2, object4, andThen, maybe)
 
 import Bets.Types exposing (Bet, Round(..), Answer, AnswerT(..), Team, Bracket(..), HasQualified(..), Topscorer, Points)
@@ -25,7 +22,7 @@ import Utils.Types exposing (roundFromString)
 
 import Dict
 import String
-import List.Extra exposing (groupBy)
+import List.Extra exposing (groupWhile)
 
 import Bets.Bet
 
@@ -59,7 +56,7 @@ type alias Model =
   , err : Maybe Http.Error
   }
 
-type Action
+type Msg
   = FetchRankingSummary
   | Receive Rankings
   | Failure Http.Error
@@ -68,48 +65,39 @@ type Action
   | BackToRankings
 
 
-update : Action -> Model -> (Model, Effects Action)
-update action model =
-  case action of
+update : Msg -> Model -> (Model, Cmd Msg)
+update msg model =
+  case msg of
     FetchRankingSummary ->
       fetchRankingSummary model "/app/rankings"
 
     Receive rs ->
-      ({model | rankings = rs.rankings}, Effects.none)
+      ({model | rankings = rs.rankings}, Cmd.none)
 
     Failure httpError ->
       let
         err = Debug.log "err" httpError
       in
-        ({model | err = Just err}, Effects.none)
+        ({model | err = Just err}, Cmd.none)
 
     SetCurrent uuid ->
       fetchRanking model ("/app/rankings/" ++ uuid)
 
     RankingReceived r ->
-      ({model | current = Just (Debug.log "r" r)}, Effects.none)
+      ({model | current = Just r}, Cmd.none)
 
     BackToRankings ->
-      ({model | current = Nothing}, Effects.none)
+      ({model | current = Nothing}, Cmd.none)
 
-app : StartApp.App Model
-app =
-  StartApp.start
+main : Program Never
+main =
+  Html.program
     { init = (fetchRankingSummary newModel "/app/rankings")
     , update = update
     , view = view
-    , inputs = []
+    , subscriptions = \_ -> Sub.none
     }
 
-
-main: Signal Html.Html
-main =
-  app.html
-
-
-port tasks : Signal (Task.Task Never ())
-port tasks =
-  app.tasks
 
 newModel : Model
 newModel =
@@ -119,22 +107,24 @@ newModel =
   }
 
 
-view : Signal.Address Action -> Model -> Html
-view address model =
-  case model.current of
-    Nothing ->
-      viewOverview address model.rankings
-    Just r ->
-      viewRanking address r
-
-viewOverview : Signal.Address Action -> List RankingSummary -> Html
-viewOverview address rs =
+view : Model -> Html Msg
+view model =
   let
-    --rankings =
-    --  List.map (viewRankingLine address) model.rankings
+    vw =
+      case model.current of
+        Nothing ->
+          viewOverview model.rankings
+        Just r ->
+          viewRanking r
+  in
+    Html.div [] [vw]
+
+viewOverview : List RankingSummary -> Html Msg
+viewOverview rs =
+  let
 
     rankingsByPoints =
-      groupBy (\x y -> .total x == .total y) rs
+      groupBy .total rs
       |> List.map toPointRankingsTuple
       |> toPositions 1
 
@@ -189,13 +179,13 @@ viewOverview address rs =
       Html.section [] (List.map rankingViewByPoints rankingsByPoints)
 
     rankingsViewsByPoints2 =
-      Html.table [] (List.map (viewRankingLine address) rankingsByPoints)
+      Html.table [] (List.map viewRankingLine rankingsByPoints)
 
     homelink =
       Html.p []
         [ Html.a [ href "/voetbalpool", class "button-like right"] [ text "home"]
         , text " / "
-        , Html.span [ class "button-like right clickable", onClick address BackToRankings] [ text "stand"]
+        , Html.span [ class "button-like right clickable", onClick BackToRankings] [ text "stand"]
         , text " / "
         ]
   in
@@ -203,19 +193,18 @@ viewOverview address rs =
       [ homelink
       , Html.h1 [] [text "De stand"]
       , rankingsViewsByPoints2
---      , div [class "button xxxs clickable active", onClick address FetchRankingSummary] [text "verversen"]
       ]
 
 
-viewRankingLine : Signal.Address Action -> (Int, (Int, List RankingSummary)) -> Html
-viewRankingLine address (pos, (pts, rankings)) =
+viewRankingLine : (Int, (Int, List RankingSummary)) -> Html Msg
+viewRankingLine (pos, (pts, rankings)) =
   let
     players =
       List.map mkRanking rankings
       |> List.intersperse (text ", ")
 
     mkRanking ranking =
-      Html.span [class "clickable", onClick address (SetCurrent ranking.uuid)] [text ranking.name]
+      Html.span [class "clickable", onClick (SetCurrent ranking.uuid)] [text ranking.name]
 
   in
     tr []
@@ -227,40 +216,40 @@ viewRankingLine address (pos, (pts, rankings)) =
 
 -- ranking
 
-viewRanking : Signal.Address Action -> Ranking -> Html
-viewRanking address model =
+viewRanking : Ranking -> Html Msg
+viewRanking model =
   Html.section []
-    [ viewTop address model
-    , viewMatches address model
-    , viewBracket address model
-    , viewTopscorer address model
+    [ viewTop model
+    , viewMatches model
+    , viewBracket model
+    , viewTopscorer model
     ]
 
-viewTop : Signal.Address Action -> Ranking -> Html
-viewTop address ranking =
+viewTop : Ranking -> Html Msg
+viewTop ranking =
   Html.p []
     [ Html.a [ href "/voetbalpool", class "button-like right"] [ text "home"]
     , text " / "
-    , Html.span [ class "button-like right clickable", onClick address BackToRankings] [ text "stand"]
+    , Html.span [ class "button-like right clickable", onClick BackToRankings] [ text "stand"]
     , text " / "
     , Html.span [ class "button-like right"] [ text ranking.name]
     , text " / "
     ]
 
 
-viewMatches : Signal.Address Action -> Ranking -> Html
-viewMatches address ranking =
+viewMatches : Ranking -> Html Msg
+viewMatches ranking =
   let
     answers =
       List.sortBy fst ranking.bet.answers
   in
     Html.section []
      [ Html.h1 [] [text "Uitslagen"]
-     , Html.div [class "container"] (List.filterMap (viewMatch address) answers)
+     , Html.div [class "container"] (List.filterMap viewMatch answers)
      ]
 
-viewMatch : Signal.Address Action -> Answer -> Maybe Html
-viewMatch address (_, answer) =
+viewMatch : Answer -> Maybe (Html Msg)
+viewMatch (_, answer) =
   case answer of
     AnswerGroupMatch group match mScore points ->
       let
@@ -320,8 +309,8 @@ viewMatch address (_, answer) =
       Nothing
 
 -- AnswerGroupMatch Group Match (Maybe Score) Points
-viewBracket : Signal.Address Action -> Ranking -> Html
-viewBracket address ranking =
+viewBracket : Ranking -> Html Msg
+viewBracket ranking =
   let
     mAnswer =
       Bets.Bet.getAnswer ranking.bet "br"
@@ -330,15 +319,15 @@ viewBracket address ranking =
       Just ((answerId, AnswerBracket bracket _) as answer)->
         Html.section []
          [ Html.h1 [] [text "Schema"]
-         , viewBracket' address ranking.bet bracket
+         , viewBracket' ranking.bet bracket
          ]
       _ ->
         Html.section [] [text "O jee, daar ging iets niet helemaal goed..."]
 
 
 
-viewBracket' : Signal.Address Action -> Bet -> Bracket -> Html
-viewBracket' address bet bracket =
+viewBracket' : Bet -> Bracket -> Html Msg
+viewBracket' bet bracket =
   {-
     mn37 = MatchNode "m37" None tnra tnrc -- "2016/06/15 15:00" saintetienne (Just "W37")
     mn38 = MatchNode "m38" None tnwb tnt2 -- "2016/06/15 15:00" paris (Just "W38")
@@ -360,7 +349,7 @@ viewBracket' address bet bracket =
     mn51 = MatchNode "m51" None mn49 mn50 -- "2016/06/15 15:00" saintdenis Nothing
   -}
   let
-    v = viewMatchWinner address bet
+    v = viewMatchWinner bet
 
     final = B.get bracket "m51"
 
@@ -401,8 +390,8 @@ viewBracket' address bet bracket =
 
 
 
-viewMatchWinner : Signal.Address Action -> Bet -> Maybe Bracket -> Html
-viewMatchWinner address bet mBracket =
+viewMatchWinner : Bet -> Maybe Bracket -> Html Msg
+viewMatchWinner bet mBracket =
 
   case mBracket of
 
@@ -410,10 +399,10 @@ viewMatchWinner address bet mBracket =
       let
 
         homeButton =
-          mkButton address hasQ home
+          mkButton hasQ home
 
         awayButton =
-          mkButton address hasQ away
+          mkButton hasQ away
 
         dash =
           text " - "
@@ -427,8 +416,8 @@ viewMatchWinner address bet mBracket =
       Html.p [] []
 
 
-mkButton : Signal.Address Action -> HasQualified -> Bracket ->  Html
-mkButton address hasQualified bracket =
+mkButton : HasQualified -> Bracket -> Html Msg
+mkButton hasQualified bracket =
   let
     clr =
       case hasQualified of
@@ -447,7 +436,7 @@ mkButton address hasQualified bracket =
     Html.div [class cls]
       [viewTeam (B.qualifier bracket)]
 
-mkButtonChamp : Maybe Bracket ->  Html
+mkButtonChamp : Maybe Bracket -> Html Msg
 mkButtonChamp mBracket =
   let
     mTeam =
@@ -473,8 +462,8 @@ mkButtonChamp mBracket =
 -- =====================
 -- type alias Topscorer = (Maybe String, Maybe Team)
 
-viewTopscorer : Signal.Address Action -> Ranking -> Html
-viewTopscorer address ranking =
+viewTopscorer : Ranking -> Html Msg
+viewTopscorer ranking =
   let
     mAnswer =
       Bets.Bet.getAnswer ranking.bet "ts"
@@ -484,13 +473,13 @@ viewTopscorer address ranking =
         Html.section []
           [ Html.h1 [] [text "Topscorer"]
           , Html.div [class "container left"]
-            [ viewTopscorer' address topscorer points ]
+            [ viewTopscorer' topscorer points ]
           ]
       _ ->
         Html.section [] [text "O jee, daar ging iets niet helemaal goed..."]
 
-viewTopscorer' : Signal.Address Action -> Topscorer -> Points -> Html
-viewTopscorer' address topscorer points =
+viewTopscorer' : Topscorer -> Points -> Html Msg
+viewTopscorer' topscorer points =
   case topscorer of
     (Just name, Just team) ->
       div [class "topscorer cell match xxl"]
@@ -550,40 +539,34 @@ decodeRounds =
 
 
 -- http
-fetchRankingSummary : Model -> String -> (Model, Effects Action)
-fetchRankingSummary model urlString =
+fetchRankingSummary : Model -> String -> (Model, Cmd Msg)
+fetchRankingSummary model url =
   let
-    request = Task.map
-      (\resp -> Receive resp)
-      (Http.get decode urlString)
-
-    neverFailingRequest = Task.onError
-      request
-      (\err -> Task.succeed (Failure (Debug.log "err" err)))
+    newCmd =
+      Task.perform Failure Receive (Http.get decode url)
   in
-    ( model, Effects.task neverFailingRequest )
+    (model, newCmd)
 
-
-fetchRanking : Model -> String -> (Model, Effects Action)
-fetchRanking model urlString =
+fetchRanking : Model -> String -> (Model, Cmd Msg)
+fetchRanking model url =
   let
-    request = Task.map
-      (\resp -> RankingReceived resp)
-      (Http.get decodeRanking urlString)
-
-    neverFailingRequest = Task.onError
-      request
-      (\err -> Task.succeed (Failure err))
+    newCmd =
+      Task.perform Failure RankingReceived (Http.get decodeRanking url)
   in
-    ( model, Effects.task neverFailingRequest )
+    (model, newCmd)
+
 
 
 -- Utils
 
-viewTeam : Maybe Team -> Html
+viewTeam : Maybe Team -> Html Msg
 viewTeam team =
   div [class "team cell"]
     [ span [ class "flag" ] [T.flag team]
     , Html.br [] []
     , span [ class "team-name"] [text (T.mdisplay team)]
     ]
+
+groupBy : (a -> comparable) -> List a -> List (List a)
+groupBy toComparable =
+  groupWhile (\left right -> toComparable left == toComparable right)

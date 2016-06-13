@@ -1,4 +1,4 @@
-module Bets.Types.Participant
+module Bets.Types.Participant exposing
   ( setName
   , setAddress
   , setPhoneNumber
@@ -7,7 +7,7 @@ module Bets.Types.Participant
   , isComplete
   , encode
   , decode
-  ) where
+  )
 
 import Json.Encode
 import Json.Decode exposing (Decoder, (:=), maybe, object6)

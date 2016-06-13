@@ -1,5 +1,4 @@
-
-module Bets.Types.Bracket
+module Bets.Types.Bracket exposing
   ( set
   , setBulk
   , proceed
@@ -14,7 +13,7 @@ module Bets.Types.Bracket
   , encode
   , decode
   , decodeWinner
-  ) where
+  )
 
 import Json.Encode
 import Json.Decode exposing (Decoder, (:=), maybe, fail)

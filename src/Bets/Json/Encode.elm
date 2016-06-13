@@ -1,4 +1,4 @@
-module Bets.Json.Encode (mStrEnc, mIntEnc) where
+module Bets.Json.Encode exposing (mStrEnc, mIntEnc)
 
 import Json.Encode
 

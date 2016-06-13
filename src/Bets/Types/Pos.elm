@@ -1,4 +1,4 @@
-module Bets.Types.Pos (encode, decode) where
+module Bets.Types.Pos exposing (encode, decode)
 
 import Bets.Types exposing (Pos(..))
 

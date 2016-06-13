@@ -1,4 +1,4 @@
-module Bets.Types.Topscorer
+module Bets.Types.Topscorer exposing
   ( getTeam
   , setTeam
   , getPlayer
@@ -6,7 +6,7 @@ module Bets.Types.Topscorer
   , isComplete
   , decode
   , encode
-  ) where
+  )
 
 import Json.Encode
 import Json.Decode exposing (Decoder, (:=), maybe, tuple2)

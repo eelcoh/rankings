@@ -1,10 +1,9 @@
-module Bets.Types.Candidates
+module Bets.Types.Candidates exposing
   ( candidates
   , findCandidates
   , findTeams
   , mergeCandidates
   )
-  where
 
 import Bets.Types exposing (Answers, Answer, AnswerID, AnswerT(..), Pos(..), Team, Round, Draw, BestThirds, Points, Group, Candidates)
 

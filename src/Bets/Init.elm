@@ -1,4 +1,4 @@
-module Bets.Init (bet) where
+module Bets.Init exposing (bet)
 
 import Bets.Types exposing (..)
 import Bets.Types.Team exposing (team)

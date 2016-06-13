@@ -1,4 +1,4 @@
-module Utils.Types (roundFromString) where
+module Utils.Types exposing (roundFromString)
 
 import Bets.Types exposing (Round(..))
 

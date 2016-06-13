@@ -1,4 +1,4 @@
-module Bets.Types.Draw (team, isComplete, encode, decode) where
+module Bets.Types.Draw exposing (team, isComplete, encode, decode)
 
 import Bets.Types exposing (DrawID, Draw, Team)
 import Bets.Types.Team as T

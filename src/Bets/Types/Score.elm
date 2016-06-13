@@ -1,4 +1,4 @@
-module Bets.Types.Score (homeScore, awayScore, asString, merge, isComplete, decode, encode, encodeMaybe) where
+module Bets.Types.Score exposing (homeScore, awayScore, asString, merge, isComplete, decode, encode, encodeMaybe)
 
 import Json.Encode
 import Json.Decode exposing (Decoder, (:=), maybe, tuple2)

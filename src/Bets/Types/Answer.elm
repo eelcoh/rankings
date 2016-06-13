@@ -1,4 +1,4 @@
-module Bets.Types.Answer (isComplete, summary, encode, encodeAnswer, decode) where
+module Bets.Types.Answer exposing (isComplete, summary, encode, encodeAnswer, decode)
 
 import Json.Encode
 import Json.Decode exposing (Decoder, (:=), object2, object4, andThen, maybe)

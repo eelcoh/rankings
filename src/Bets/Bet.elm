@@ -1,4 +1,4 @@
-module Bets.Bet
+module Bets.Bet exposing
   ( getAnswer
   , candidates
   , findGroupMatchAnswers
@@ -12,7 +12,7 @@ module Bets.Bet
   , encode
   , decode
   , decodeBet
-  ) where
+  )
 
 import Bets.Types exposing (..)
 import Bets.Types.Answers

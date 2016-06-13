@@ -1,4 +1,4 @@
-module Bets.Types.BestThirds (updateChoices, teamsToReset, isComplete, encode, decode) where
+module Bets.Types.BestThirds exposing (updateChoices, teamsToReset, isComplete, encode, decode)
 
 import Json.Encode
 import Json.Decode exposing (Decoder, (:=))

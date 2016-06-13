@@ -1,4 +1,4 @@
-module Bets.Types
+module Bets.Types exposing
   ( Bet
   , Answer
   , AnswerID
@@ -30,7 +30,7 @@ module Bets.Types
   , Winner (..)
   , Qualifier
   , HasQualified (..)
-  ) where
+  )
 
 import Date
 

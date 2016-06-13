@@ -1,4 +1,4 @@
-module Bets.Test (clean) where
+module Bets.Test exposing (clean)
 
 
 cleanInt : Int -> Maybe Int -> Maybe Int

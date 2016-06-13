@@ -1,4 +1,4 @@
-module Bets.Types.Match
+module Bets.Types.Match exposing
   ( homeTeam
   , awayTeam
   , teamsInMatch
@@ -7,7 +7,7 @@ module Bets.Types.Match
   , isComplete
   , encode
   , decode
-  ) where
+  ) 
 
 import Json.Encode
 import Json.Decode exposing (Decoder)

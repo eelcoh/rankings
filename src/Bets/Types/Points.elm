@@ -1,4 +1,4 @@
-module Bets.Types.Points (encode, decode) where
+module Bets.Types.Points exposing (encode, decode)
 
 import Json.Encode
 

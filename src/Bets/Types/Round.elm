@@ -1,10 +1,10 @@
-module Bets.Types.Round
+module Bets.Types.Round exposing
   ( toInt
   , nextRound
   , isSameOrANextRound
   , encode
   , decode
-  ) where
+  ) 
 
 import Bets.Types exposing (Round(..))
 

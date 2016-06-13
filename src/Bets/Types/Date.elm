@@ -1,4 +1,4 @@
-module Bets.Types.Date (toDate, encode, decode) where
+module Bets.Types.Date exposing (toDate, encode, decode)
 
 import Bets.Types exposing (DateString)
 import Json.Encode

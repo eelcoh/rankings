@@ -1,4 +1,4 @@
-module Bets.Types.Group (encode, decode, toString, toGroup) where
+module Bets.Types.Group exposing (encode, decode, toString, toGroup)
 
 import Json.Encode
 import Json.Decode exposing (Decoder, (:=), succeed, andThen)

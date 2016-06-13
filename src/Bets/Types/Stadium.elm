@@ -1,4 +1,4 @@
-module Bets.Types.Stadium (decode, encode) where
+module Bets.Types.Stadium exposing (decode, encode)
 
 import Json.Encode
 import Json.Decode exposing (Decoder, (:=), maybe, object2)

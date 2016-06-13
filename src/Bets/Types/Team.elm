@@ -1,4 +1,4 @@
-module Bets.Types.Team
+module Bets.Types.Team exposing
   ( team
   , display
   , mdisplay
@@ -10,7 +10,7 @@ module Bets.Types.Team
   , decode
   , encode
   , encodeMaybe
-  ) where
+  )
 
 import Html exposing (..)
 import Html.Attributes exposing (style, src, class)
@@ -92,7 +92,7 @@ log : Team -> String
 log team = team.teamName
 
 
-flag : Maybe Team -> Html
+flag : Maybe Team -> Html msg
 flag mteam =
   let
     uri team =
