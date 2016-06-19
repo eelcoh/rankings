@@ -1,11 +1,16 @@
 module Main exposing (..)
 
-import Html.App as Html
+-- import Html.App as Html
 
 import Html exposing (Html, div, span, button, text, textarea, input, section, table, td, tr, th)
 import Html.Events exposing (onClick)
 import Html.Attributes exposing (id, value, placeholder, class, href)
 
+
+import Navigation
+import Hop exposing (makeUrl, makeUrlFromLocation, matchUrl, setQuery, matcherToPath)
+import Hop.Types exposing (Config, Query, Location, PathMatcher, Router)
+import Hop.Matchers as Matcher
 import Task exposing (Task)
 import Http
 
@@ -54,6 +59,8 @@ type alias Model =
   { rankings : List RankingSummary
   , current : Maybe Ranking
   , err : Maybe Http.Error
+  , location : Location
+  , route : Route
   }
 
 type Msg
@@ -63,7 +70,75 @@ type Msg
   | SetCurrent UUID
   | RankingReceived Ranking
   | BackToRankings
+  | NavigateTo String
 
+{-
+  Navigation
+-}
+
+
+type Route
+  = MainRoute
+  | Details String
+
+routerConfig : Config Route
+routerConfig =
+    { hash = True
+    , basePath = "/voetbalpool/stand"
+    , matchers = matchers
+    , notFound = MainRoute
+    }
+
+matchers : List (PathMatcher Route)
+matchers =
+    [ mainMatcher
+    , detailsMatcher
+    ]
+
+mainMatcher : PathMatcher Route
+mainMatcher =
+  Matcher.match1 MainRoute ""
+
+detailsMatcher : PathMatcher Route
+detailsMatcher =
+  Matcher.match2 Details "/" Matcher.str
+
+urlParser : Navigation.Parser ( Route, Hop.Types.Location )
+urlParser =
+    Navigation.makeParser (.href >> matchUrl routerConfig)
+
+
+urlUpdate : ( Route, Hop.Types.Location ) -> Model -> ( Model, Cmd Msg )
+urlUpdate ( route, location ) model =
+  case route of
+    MainRoute ->
+      let
+        newModel =
+          {model | current = Nothing, route = route, location = location }
+      in
+        if (List.isEmpty newModel.rankings)
+          then
+            fetchRankingSummary newModel "/app/rankings"
+          else
+            (newModel, Cmd.none)
+    Details uuid ->
+      fetchRanking { model | route = route, location = location } ("/app/rankings/" ++ uuid)
+
+
+mkUrlFromRoute : Route -> String
+mkUrlFromRoute route =
+  case route of
+
+    MainRoute ->
+      matcherToPath mainMatcher []
+
+    Details uuid ->
+      matcherToPath detailsMatcher [uuid]
+
+
+{-
+  Update
+-}
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
@@ -89,22 +164,39 @@ update msg model =
     BackToRankings ->
       ({model | current = Nothing}, Cmd.none)
 
+    NavigateTo path ->
+      let
+        command =
+          -- First generate the URL using your router config
+          -- Then generate a command using Navigation.modifyUrl
+          makeUrl routerConfig path
+          |> Navigation.newUrl
+      in
+          ( model, command )
+
 main : Program Never
 main =
-  Html.program
-    { init = (fetchRankingSummary newModel "/app/rankings")
+  Navigation.program urlParser
+    { init = init
     , update = update
     , view = view
+    , urlUpdate = urlUpdate
     , subscriptions = \_ -> Sub.none
     }
 
-
-newModel : Model
-newModel =
-  { rankings = []
-  , current = Nothing
-  , err = Nothing
-  }
+init : ( Route, Hop.Types.Location ) -> ( Model, Cmd Msg )
+init ( route, location ) =
+  let
+    newModel =
+      { rankings = []
+      , current = Nothing
+      , err = Nothing
+      , route = route
+      , location = location
+      }
+  in
+    urlUpdate ( route, location ) newModel
+    --(fetchRankingSummary newModel "/app/rankings")
 
 
 view : Model -> Html Msg
@@ -117,7 +209,22 @@ view model =
         Just r ->
           viewRanking r
   in
-    Html.div [] [vw]
+    Html.div []
+      [ vw
+      ]
+
+rankingsBreadCrumb : Html Msg
+rankingsBreadCrumb =
+  let
+    toRanking =
+      mkUrlFromRoute (MainRoute)
+      |> NavigateTo
+  in
+    Html.span [ class "button-like right clickable", onClick toRanking] [ text "stand"]
+
+homeBreadCrumb : Html Msg
+homeBreadCrumb =
+  Html.a [ href "/voetbalpool", class "button-like right"] [ text "home"]
 
 viewOverview : List RankingSummary -> Html Msg
 viewOverview rs =
@@ -181,11 +288,12 @@ viewOverview rs =
     rankingsViewsByPoints2 =
       Html.table [] (List.map viewRankingLine rankingsByPoints)
 
+
     homelink =
       Html.p []
-        [ Html.a [ href "/voetbalpool", class "button-like right"] [ text "home"]
+        [ homeBreadCrumb
         , text " / "
-        , Html.span [ class "button-like right clickable", onClick BackToRankings] [ text "stand"]
+        , rankingsBreadCrumb
         , text " / "
         ]
   in
@@ -199,12 +307,16 @@ viewOverview rs =
 viewRankingLine : (Int, (Int, List RankingSummary)) -> Html Msg
 viewRankingLine (pos, (pts, rankings)) =
   let
+
+    url uuid =
+      mkUrlFromRoute (Details uuid)
+
     players =
       List.map mkRanking rankings
       |> List.intersperse (text ", ")
 
     mkRanking ranking =
-      Html.span [class "clickable", onClick (SetCurrent ranking.uuid)] [text ranking.name]
+      Html.span [class "clickable", onClick (NavigateTo (url ranking.uuid))] [text ranking.name]
 
   in
     tr []
@@ -228,9 +340,9 @@ viewRanking model =
 viewTop : Ranking -> Html Msg
 viewTop ranking =
   Html.p []
-    [ Html.a [ href "/voetbalpool", class "button-like right"] [ text "home"]
+    [ homeBreadCrumb
     , text " / "
-    , Html.span [ class "button-like right clickable", onClick BackToRankings] [ text "stand"]
+    , rankingsBreadCrumb
     , text " / "
     , Html.span [ class "button-like right"] [ text ranking.name]
     , text " / "
