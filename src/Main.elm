@@ -395,14 +395,20 @@ viewMatchWinner bet mBracket =
 
   case mBracket of
 
-    Just (MatchNode slot winner home away rd hasQ ) ->
+    Just (MatchNode slot winner home away rd _ ) ->
       let
 
+        homeQualified =
+          didQualify home
+
         homeButton =
-          mkButton hasQ home
+          mkButton homeQualified home
+
+        awayQualified =
+          didQualify away
 
         awayButton =
-          mkButton hasQ away
+          mkButton awayQualified away
 
         dash =
           text " - "
@@ -422,42 +428,38 @@ mkButton hasQualified bracket =
     clr =
       case hasQualified of
         In ->
-          "active"
+          "border-score"
         Out ->
-          "wrong"
+          "border-wrong"
         TBD ->
-          "match"
+          "border-tbd"
 
     cls =
-      String.join " " [ "xl", "cell2", clr]
+      String.join " " [ "xl", "cell2", "match", clr]
 
   in
 
     Html.div [class cls]
       [viewTeam (B.qualifier bracket)]
 
+
+didQualify : Bracket -> HasQualified
+didQualify bracket =
+  case bracket of
+    MatchNode _ _ _ _ _ hasQualified ->
+      hasQualified
+    TeamNode _ _ hasQualified ->
+      hasQualified
+
+
 mkButtonChamp : Maybe Bracket -> Html Msg
 mkButtonChamp mBracket =
-  let
-    mTeam =
-      mBracket `Maybe.andThen` B.winner
+  case mBracket of
+    Just br ->
+      mkButton (didQualify br) br
+    _ ->
+      div [] []
 
-    clr =
-      case mTeam of
-        Just t ->
-          "match"
-        Nothing ->
-          "wrong"
-
-    cls =
-      String.join " " [ "xl", "cell2", clr]
-
-    attrs =
-      []
-  in
-    -- viewTeam mTeam
-    Html.div [class cls]
-      [viewTeam mTeam]
 
 -- =====================
 -- type alias Topscorer = (Maybe String, Maybe Team)
