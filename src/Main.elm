@@ -1,7 +1,5 @@
 module Main exposing (..)
 
--- import Html.App as Html
-
 import Html exposing (Html, div, span, button, text, textarea, input, section, table, td, tr, th)
 import Html.Events exposing (onClick)
 import Html.Attributes exposing (id, value, placeholder, class, href)
@@ -31,13 +29,17 @@ import List.Extra exposing (groupWhile)
 
 import Bets.Bet
 
+{- --------------------------------------------------------
+  Types (including model and messages)
+-------------------------------------------------------- -}
+
 type alias UUID = String
 
 type alias RankingSummary =
   { name : String
   , pos : Int
   , rounds : List (Round, Int)
-  , topscorer : Int
+  , topscorer : Maybe Int
   , total : Int
   , uuid : String
   }
@@ -49,7 +51,7 @@ type alias Ranking =
   { name : String
   , pos : Int
   , rounds : List (Round, Int)
-  , topscorer : Int
+  , topscorer : Maybe Int
   , total : Int
   , uuid : String
   , bet : Bets.Types.Bet
@@ -64,22 +66,23 @@ type alias Model =
   }
 
 type Msg
-  = FetchRankingSummary
-  | Receive Rankings
+  = Receive Rankings
   | Failure Http.Error
-  | SetCurrent UUID
   | RankingReceived Ranking
-  | BackToRankings
   | NavigateTo String
+  | UrlUpdate Route Hop.Types.Location
+  | ShowMain
+  | ShowDetails UUID
 
-{-
-  Navigation
--}
 
+{- --------------------------------------------------------
+  Navigation (Hop related)
+-------------------------------------------------------- -}
 
 type Route
   = MainRoute
   | Details String
+
 
 routerConfig : Config Route
 routerConfig =
@@ -89,40 +92,36 @@ routerConfig =
     , notFound = MainRoute
     }
 
+
 matchers : List (PathMatcher Route)
 matchers =
     [ mainMatcher
     , detailsMatcher
     ]
 
+
 mainMatcher : PathMatcher Route
 mainMatcher =
   Matcher.match1 MainRoute ""
+
 
 detailsMatcher : PathMatcher Route
 detailsMatcher =
   Matcher.match2 Details "/" Matcher.str
 
+
 urlParser : Navigation.Parser ( Route, Hop.Types.Location )
 urlParser =
-    Navigation.makeParser (.href >> matchUrl routerConfig)
+  Navigation.makeParser (.href >> matchUrl routerConfig)
 
 
 urlUpdate : ( Route, Hop.Types.Location ) -> Model -> ( Model, Cmd Msg )
 urlUpdate ( route, location ) model =
-  case route of
-    MainRoute ->
-      let
-        newModel =
-          {model | current = Nothing, route = route, location = location }
-      in
-        if (List.isEmpty newModel.rankings)
-          then
-            fetchRankingSummary newModel "/app/rankings"
-          else
-            (newModel, Cmd.none)
-    Details uuid ->
-      fetchRanking { model | route = route, location = location } ("/app/rankings/" ++ uuid)
+  let
+    msg =
+      UrlUpdate route location
+  in
+    update msg model
 
 
 mkUrlFromRoute : Route -> String
@@ -136,16 +135,13 @@ mkUrlFromRoute route =
       matcherToPath detailsMatcher [uuid]
 
 
-{-
+{- --------------------------------------------------------
   Update
--}
+-------------------------------------------------------- -}
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
   case msg of
-    FetchRankingSummary ->
-      fetchRankingSummary model "/app/rankings"
-
     Receive rs ->
       ({model | rankings = rs.rankings}, Cmd.none)
 
@@ -155,24 +151,48 @@ update msg model =
       in
         ({model | err = Just err}, Cmd.none)
 
-    SetCurrent uuid ->
-      fetchRanking model ("/app/rankings/" ++ uuid)
-
     RankingReceived r ->
       ({model | current = Just r}, Cmd.none)
-
-    BackToRankings ->
-      ({model | current = Nothing}, Cmd.none)
 
     NavigateTo path ->
       let
         command =
           -- First generate the URL using your router config
           -- Then generate a command using Navigation.modifyUrl
+          -- will call urlUpdate when ready!
           makeUrl routerConfig path
           |> Navigation.newUrl
       in
-          ( model, command )
+        ( model, command )
+
+    UrlUpdate route location ->
+      let
+        newModel =
+          {model | route = route, location = location }
+      in
+        case route of
+          MainRoute ->
+            update ShowMain newModel
+          Details uuid ->
+            update (ShowDetails uuid) { model | route = route, location = location }
+
+    ShowMain ->
+      let
+        newModel =
+          { model | current = Nothing }
+      in
+        if (List.isEmpty model.rankings)
+          then
+            fetchRankingSummary newModel "/app/rankings"
+          else
+            (newModel , Cmd.none)
+
+    ShowDetails uuid ->
+      fetchRanking model ("/app/rankings/" ++ uuid)
+
+{- --------------------------------------------------------
+  Bootstrapping
+-------------------------------------------------------- -}
 
 main : Program Never
 main =
@@ -183,6 +203,7 @@ main =
     , urlUpdate = urlUpdate
     , subscriptions = \_ -> Sub.none
     }
+
 
 init : ( Route, Hop.Types.Location ) -> ( Model, Cmd Msg )
 init ( route, location ) =
@@ -196,8 +217,10 @@ init ( route, location ) =
       }
   in
     urlUpdate ( route, location ) newModel
-    --(fetchRankingSummary newModel "/app/rankings")
 
+{- --------------------------------------------------------
+  View (top level)
+-------------------------------------------------------- -}
 
 view : Model -> Html Msg
 view model =
@@ -225,6 +248,10 @@ rankingsBreadCrumb =
 homeBreadCrumb : Html Msg
 homeBreadCrumb =
   Html.a [ href "/voetbalpool", class "button-like right"] [ text "home"]
+
+{- --------------------------------------------------------
+  View rankings list
+-------------------------------------------------------- -}
 
 viewOverview : List RankingSummary -> Html Msg
 viewOverview rs =
@@ -326,7 +353,9 @@ viewRankingLine (pos, (pts, rankings)) =
       ]
 
 
--- ranking
+{- --------------------------------------------------------
+  View ranking details
+-------------------------------------------------------- -}
 
 viewRanking : Ranking -> Html Msg
 viewRanking model =
@@ -594,20 +623,38 @@ viewTopscorer ranking =
 
 viewTopscorer' : Topscorer -> Points -> Html Msg
 viewTopscorer' topscorer points =
-  case topscorer of
-    (Just name, Just team) ->
-      div [class "topscorer cell match xxl"]
-        [ span [ class "flag" ] [T.flag (Just team)]
-        , Html.br [] []
-        , span [ class "team-name"] [text name]
-        ]
-    _ ->
-      Html.section [] [text "O jee, daar ging iets niet helemaal goed..."]
+  let
+    clr =
+      case points of
+        Just n ->
+          if n == 9
+            then
+              "border-score"
+            else
+              "border-wrong"
+        Nothing ->
+          "border-tbd"
+    cls =
+      String.join " " [ "xxl", "cell", "topscorer", "match", clr]
+
+  in
+
+    case topscorer of
+      (Just name, Just team) ->
+        div [class cls]
+          [ span [ class "flag" ] [T.flag (Just team)]
+          , Html.br [] []
+          , span [ class "team-name"] [text name]
+          ]
+      _ ->
+        Html.section [] [text "O jee, daar ging iets niet helemaal goed..."]
 
 
 
 
--- Json
+{- --------------------------------------------------------
+  Json decoding
+-------------------------------------------------------- -}
 
 decode : Decoder Rankings
 decode =
@@ -622,7 +669,7 @@ decodeRankingSummary =
     ("name" := Json.Decode.string)
     ("pos" := Json.Decode.int)
     ("rounds" := decodeRounds)
-    ("topscorer" := Json.Decode.int)
+    ("topscorer" := Json.Decode.maybe Json.Decode.int)
     ("total" := Json.Decode.int)
     ("uuid" := Json.Decode.string)
 
@@ -633,7 +680,7 @@ decodeRanking =
     ("name" := Json.Decode.string)
     ("pos" := Json.Decode.int)
     ("rounds" := decodeRounds)
-    ("topscorer" := Json.Decode.int)
+    ("topscorer" := Json.Decode.maybe Json.Decode.int)
     ("total" := Json.Decode.int)
     ("uuid" := Json.Decode.string)
     ("bet" := Bets.Bet.decodeBet)
@@ -652,7 +699,10 @@ decodeRounds =
     |> Json.Decode.map toRoundAndInts
 
 
--- http
+{- --------------------------------------------------------
+  API Calls
+-------------------------------------------------------- -}
+
 fetchRankingSummary : Model -> String -> (Model, Cmd Msg)
 fetchRankingSummary model url =
   let
@@ -669,9 +719,9 @@ fetchRanking model url =
   in
     (model, newCmd)
 
-
-
--- Utils
+{- --------------------------------------------------------
+  Utils
+-------------------------------------------------------- -}
 
 viewTeam : Maybe Team -> Html Msg
 viewTeam team =

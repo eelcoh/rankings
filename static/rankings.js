@@ -14330,13 +14330,26 @@ var _user$project$Main$decodeRounds = function () {
 }();
 var _user$project$Main$viewTopscorer$ = F2(
 	function (topscorer, points) {
-		var _p2 = topscorer;
-		if (((_p2.ctor === '_Tuple2') && (_p2._0.ctor === 'Just')) && (_p2._1.ctor === 'Just')) {
+		var clr = function () {
+			var _p2 = points;
+			if (_p2.ctor === 'Just') {
+				return _elm_lang$core$Native_Utils.eq(_p2._0, 9) ? 'border-score' : 'border-wrong';
+			} else {
+				return 'border-tbd';
+			}
+		}();
+		var cls = A2(
+			_elm_lang$core$String$join,
+			' ',
+			_elm_lang$core$Native_List.fromArray(
+				['xxl', 'cell', 'topscorer', 'match', clr]));
+		var _p3 = topscorer;
+		if (((_p3.ctor === '_Tuple2') && (_p3._0.ctor === 'Just')) && (_p3._1.ctor === 'Just')) {
 			return A2(
 				_elm_lang$html$Html$div,
 				_elm_lang$core$Native_List.fromArray(
 					[
-						_elm_lang$html$Html_Attributes$class('topscorer cell match xxl')
+						_elm_lang$html$Html_Attributes$class(cls)
 					]),
 				_elm_lang$core$Native_List.fromArray(
 					[
@@ -14349,7 +14362,7 @@ var _user$project$Main$viewTopscorer$ = F2(
 						_elm_lang$core$Native_List.fromArray(
 							[
 								_user$project$Bets_Types_Team$flag(
-								_elm_lang$core$Maybe$Just(_p2._1._0))
+								_elm_lang$core$Maybe$Just(_p3._1._0))
 							])),
 						A2(
 						_elm_lang$html$Html$br,
@@ -14365,7 +14378,7 @@ var _user$project$Main$viewTopscorer$ = F2(
 							]),
 						_elm_lang$core$Native_List.fromArray(
 							[
-								_elm_lang$html$Html$text(_p2._0._0)
+								_elm_lang$html$Html$text(_p3._0._0)
 							]))
 					]));
 		} else {
@@ -14381,8 +14394,8 @@ var _user$project$Main$viewTopscorer$ = F2(
 	});
 var _user$project$Main$viewTopscorer = function (ranking) {
 	var mAnswer = A2(_user$project$Bets_Bet$getAnswer, ranking.bet, 'ts');
-	var _p3 = mAnswer;
-	if (((_p3.ctor === 'Just') && (_p3._0.ctor === '_Tuple2')) && (_p3._0._1.ctor === 'AnswerTopscorer')) {
+	var _p4 = mAnswer;
+	if (((_p4.ctor === 'Just') && (_p4._0.ctor === '_Tuple2')) && (_p4._0._1.ctor === 'AnswerTopscorer')) {
 		return A2(
 			_elm_lang$html$Html$section,
 			_elm_lang$core$Native_List.fromArray(
@@ -14405,7 +14418,7 @@ var _user$project$Main$viewTopscorer = function (ranking) {
 						]),
 					_elm_lang$core$Native_List.fromArray(
 						[
-							A2(_user$project$Main$viewTopscorer$, _p3._0._1._0, _p3._0._1._1)
+							A2(_user$project$Main$viewTopscorer$, _p4._0._1._0, _p4._0._1._1)
 						]))
 				]));
 	} else {
@@ -14420,18 +14433,18 @@ var _user$project$Main$viewTopscorer = function (ranking) {
 	}
 };
 var _user$project$Main$didQualify = function (bracket) {
-	var _p4 = bracket;
-	if (_p4.ctor === 'MatchNode') {
-		return _p4._5;
+	var _p5 = bracket;
+	if (_p5.ctor === 'MatchNode') {
+		return _p5._5;
 	} else {
-		return _p4._2;
+		return _p5._2;
 	}
 };
 var _user$project$Main$mkButton = F2(
 	function (hasQualified, bracket) {
 		var clr = function () {
-			var _p5 = hasQualified;
-			switch (_p5.ctor) {
+			var _p6 = hasQualified;
+			switch (_p6.ctor) {
 				case 'In':
 					return 'border-score';
 				case 'Out':
@@ -14458,13 +14471,13 @@ var _user$project$Main$mkButton = F2(
 				]));
 	});
 var _user$project$Main$mkButtonChamp = function (mBracket) {
-	var _p6 = mBracket;
-	if (_p6.ctor === 'Just') {
-		var _p7 = _p6._0;
+	var _p7 = mBracket;
+	if (_p7.ctor === 'Just') {
+		var _p8 = _p7._0;
 		return A2(
 			_user$project$Main$mkButton,
-			_user$project$Main$didQualify(_p7),
-			_p7);
+			_user$project$Main$didQualify(_p8),
+			_p8);
 	} else {
 		return A2(
 			_elm_lang$html$Html$div,
@@ -14476,15 +14489,15 @@ var _user$project$Main$mkButtonChamp = function (mBracket) {
 };
 var _user$project$Main$viewMatchWinner = F2(
 	function (bet, mBracket) {
-		var _p8 = mBracket;
-		if ((_p8.ctor === 'Just') && (_p8._0.ctor === 'MatchNode')) {
-			var _p10 = _p8._0._2;
-			var _p9 = _p8._0._3;
+		var _p9 = mBracket;
+		if ((_p9.ctor === 'Just') && (_p9._0.ctor === 'MatchNode')) {
+			var _p11 = _p9._0._2;
+			var _p10 = _p9._0._3;
 			var dash = _elm_lang$html$Html$text(' - ');
-			var awayQualified = _user$project$Main$didQualify(_p9);
-			var awayButton = A2(_user$project$Main$mkButton, awayQualified, _p9);
-			var homeQualified = _user$project$Main$didQualify(_p10);
-			var homeButton = A2(_user$project$Main$mkButton, homeQualified, _p10);
+			var awayQualified = _user$project$Main$didQualify(_p10);
+			var awayButton = A2(_user$project$Main$mkButton, awayQualified, _p10);
+			var homeQualified = _user$project$Main$didQualify(_p11);
+			var homeButton = A2(_user$project$Main$mkButton, homeQualified, _p11);
 			return A2(
 				_elm_lang$html$Html$div,
 				_elm_lang$core$Native_List.fromArray(
@@ -14631,8 +14644,8 @@ var _user$project$Main$viewBracket$ = F2(
 	});
 var _user$project$Main$viewBracket = function (ranking) {
 	var mAnswer = A2(_user$project$Bets_Bet$getAnswer, ranking.bet, 'br');
-	var _p11 = mAnswer;
-	if (((_p11.ctor === 'Just') && (_p11._0.ctor === '_Tuple2')) && (_p11._0._1.ctor === 'AnswerBracket')) {
+	var _p12 = mAnswer;
+	if (((_p12.ctor === 'Just') && (_p12._0.ctor === '_Tuple2')) && (_p12._0._1.ctor === 'AnswerBracket')) {
 		return A2(
 			_elm_lang$html$Html$section,
 			_elm_lang$core$Native_List.fromArray(
@@ -14647,7 +14660,7 @@ var _user$project$Main$viewBracket = function (ranking) {
 						[
 							_elm_lang$html$Html$text('Schema')
 						])),
-					A2(_user$project$Main$viewBracket$, ranking.bet, _p11._0._1._0)
+					A2(_user$project$Main$viewBracket$, ranking.bet, _p12._0._1._0)
 				]));
 	} else {
 		return A2(
@@ -14660,11 +14673,11 @@ var _user$project$Main$viewBracket = function (ranking) {
 				]));
 	}
 };
-var _user$project$Main$viewMatch = function (_p12) {
-	var _p13 = _p12;
-	var _p14 = _p13._1;
-	if (_p14.ctor === 'AnswerGroupMatch') {
-		var _p17 = _p14._1;
+var _user$project$Main$viewMatch = function (_p13) {
+	var _p14 = _p13;
+	var _p15 = _p14._1;
+	if (_p15.ctor === 'AnswerGroupMatch') {
+		var _p18 = _p15._1;
 		var displayScore = function (score) {
 			var aScore = A2(
 				_elm_lang$core$Maybe$withDefault,
@@ -14687,9 +14700,9 @@ var _user$project$Main$viewMatch = function (_p12) {
 					A2(_elm_lang$core$Basics_ops['++'], '-', aScore)));
 		};
 		var scoreTxt = function () {
-			var _p15 = _p14._2;
-			if (_p15.ctor === 'Just') {
-				return displayScore(_p15._0);
+			var _p16 = _p15._2;
+			if (_p16.ctor === 'Just') {
+				return displayScore(_p16._0);
 			} else {
 				return _elm_lang$html$Html$text('_-_');
 			}
@@ -14703,11 +14716,11 @@ var _user$project$Main$viewMatch = function (_p12) {
 			_elm_lang$core$Native_List.fromArray(
 				[scoreTxt]));
 		var clr = function () {
-			var _p16 = _p14._3;
-			if (_p16.ctor === 'Nothing') {
+			var _p17 = _p15._3;
+			if (_p17.ctor === 'Nothing') {
 				return 'border-tbd';
 			} else {
-				switch (_p16._0) {
+				switch (_p17._0) {
 					case 0:
 						return 'border-wrong';
 					case 1:
@@ -14721,9 +14734,9 @@ var _user$project$Main$viewMatch = function (_p12) {
 		}();
 		var cls = A2(_elm_lang$core$Basics_ops['++'], 'cell xxl score container match ', clr);
 		var away = _user$project$Main$viewTeam(
-			_user$project$Bets_Types_Match$awayTeam(_p17));
+			_user$project$Bets_Types_Match$awayTeam(_p18));
 		var home = _user$project$Main$viewTeam(
-			_user$project$Bets_Types_Match$homeTeam(_p17));
+			_user$project$Bets_Types_Match$homeTeam(_p18));
 		return _elm_lang$core$Maybe$Just(
 			A2(
 				_elm_lang$html$Html$div,
@@ -14783,7 +14796,10 @@ var _user$project$Main$decodeRankingSummary = A7(
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'name', _elm_lang$core$Json_Decode$string),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'pos', _elm_lang$core$Json_Decode$int),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'rounds', _user$project$Main$decodeRounds),
-	A2(_elm_lang$core$Json_Decode_ops[':='], 'topscorer', _elm_lang$core$Json_Decode$int),
+	A2(
+		_elm_lang$core$Json_Decode_ops[':='],
+		'topscorer',
+		_elm_lang$core$Json_Decode$maybe(_elm_lang$core$Json_Decode$int)),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'total', _elm_lang$core$Json_Decode$int),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'uuid', _elm_lang$core$Json_Decode$string));
 var _user$project$Main$Rankings = function (a) {
@@ -14806,7 +14822,10 @@ var _user$project$Main$decodeRanking = A8(
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'name', _elm_lang$core$Json_Decode$string),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'pos', _elm_lang$core$Json_Decode$int),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'rounds', _user$project$Main$decodeRounds),
-	A2(_elm_lang$core$Json_Decode_ops[':='], 'topscorer', _elm_lang$core$Json_Decode$int),
+	A2(
+		_elm_lang$core$Json_Decode_ops[':='],
+		'topscorer',
+		_elm_lang$core$Json_Decode$maybe(_elm_lang$core$Json_Decode$int)),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'total', _elm_lang$core$Json_Decode$int),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'uuid', _elm_lang$core$Json_Decode$string),
 	A2(_elm_lang$core$Json_Decode_ops[':='], 'bet', _user$project$Bets_Bet$decodeBet));
@@ -14814,15 +14833,19 @@ var _user$project$Main$Model = F5(
 	function (a, b, c, d, e) {
 		return {rankings: a, current: b, err: c, location: d, route: e};
 	});
+var _user$project$Main$ShowDetails = function (a) {
+	return {ctor: 'ShowDetails', _0: a};
+};
+var _user$project$Main$ShowMain = {ctor: 'ShowMain'};
+var _user$project$Main$UrlUpdate = F2(
+	function (a, b) {
+		return {ctor: 'UrlUpdate', _0: a, _1: b};
+	});
 var _user$project$Main$NavigateTo = function (a) {
 	return {ctor: 'NavigateTo', _0: a};
 };
-var _user$project$Main$BackToRankings = {ctor: 'BackToRankings'};
 var _user$project$Main$RankingReceived = function (a) {
 	return {ctor: 'RankingReceived', _0: a};
-};
-var _user$project$Main$SetCurrent = function (a) {
-	return {ctor: 'SetCurrent', _0: a};
 };
 var _user$project$Main$Failure = function (a) {
 	return {ctor: 'Failure', _0: a};
@@ -14848,44 +14871,6 @@ var _user$project$Main$fetchRankingSummary = F2(
 			A2(_evancz$elm_http$Http$get, _user$project$Main$decode, url));
 		return {ctor: '_Tuple2', _0: model, _1: newCmd};
 	});
-var _user$project$Main$urlUpdate = F2(
-	function (_p18, model) {
-		var _p19 = _p18;
-		var _p22 = _p19._0;
-		var _p21 = _p19._1;
-		var _p20 = _p22;
-		if (_p20.ctor === 'MainRoute') {
-			var newModel = _elm_lang$core$Native_Utils.update(
-				model,
-				{current: _elm_lang$core$Maybe$Nothing, route: _p22, location: _p21});
-			return _elm_lang$core$List$isEmpty(newModel.rankings) ? A2(_user$project$Main$fetchRankingSummary, newModel, '/app/rankings') : {ctor: '_Tuple2', _0: newModel, _1: _elm_lang$core$Platform_Cmd$none};
-		} else {
-			return A2(
-				_user$project$Main$fetchRanking,
-				_elm_lang$core$Native_Utils.update(
-					model,
-					{route: _p22, location: _p21}),
-				A2(_elm_lang$core$Basics_ops['++'], '/app/rankings/', _p20._0));
-		}
-	});
-var _user$project$Main$init = function (_p23) {
-	var _p24 = _p23;
-	var _p26 = _p24._0;
-	var _p25 = _p24._1;
-	var newModel = {
-		rankings: _elm_lang$core$Native_List.fromArray(
-			[]),
-		current: _elm_lang$core$Maybe$Nothing,
-		err: _elm_lang$core$Maybe$Nothing,
-		route: _p26,
-		location: _p25
-	};
-	return A2(
-		_user$project$Main$urlUpdate,
-		{ctor: '_Tuple2', _0: _p26, _1: _p25},
-		newModel);
-};
-var _user$project$Main$FetchRankingSummary = {ctor: 'FetchRankingSummary'};
 var _user$project$Main$Details = function (a) {
 	return {ctor: 'Details', _0: a};
 };
@@ -14896,71 +14881,114 @@ var _user$project$Main$matchers = _elm_lang$core$Native_List.fromArray(
 	[_user$project$Main$mainMatcher, _user$project$Main$detailsMatcher]);
 var _user$project$Main$routerConfig = {hash: true, basePath: '/voetbalpool/stand', matchers: _user$project$Main$matchers, notFound: _user$project$Main$MainRoute};
 var _user$project$Main$urlParser = _elm_lang$navigation$Navigation$makeParser(
-	function (_p27) {
+	function (_p19) {
 		return A2(
 			_sporto$hop$Hop$matchUrl,
 			_user$project$Main$routerConfig,
 			function (_) {
 				return _.href;
-			}(_p27));
+			}(_p19));
 	});
 var _user$project$Main$update = F2(
 	function (msg, model) {
-		var _p28 = msg;
-		switch (_p28.ctor) {
-			case 'FetchRankingSummary':
-				return A2(_user$project$Main$fetchRankingSummary, model, '/app/rankings');
-			case 'Receive':
-				return {
-					ctor: '_Tuple2',
-					_0: _elm_lang$core$Native_Utils.update(
+		update:
+		while (true) {
+			var _p20 = msg;
+			switch (_p20.ctor) {
+				case 'Receive':
+					return {
+						ctor: '_Tuple2',
+						_0: _elm_lang$core$Native_Utils.update(
+							model,
+							{rankings: _p20._0.rankings}),
+						_1: _elm_lang$core$Platform_Cmd$none
+					};
+				case 'Failure':
+					var err = A2(_elm_lang$core$Debug$log, 'err', _p20._0);
+					return {
+						ctor: '_Tuple2',
+						_0: _elm_lang$core$Native_Utils.update(
+							model,
+							{
+								err: _elm_lang$core$Maybe$Just(err)
+							}),
+						_1: _elm_lang$core$Platform_Cmd$none
+					};
+				case 'RankingReceived':
+					return {
+						ctor: '_Tuple2',
+						_0: _elm_lang$core$Native_Utils.update(
+							model,
+							{
+								current: _elm_lang$core$Maybe$Just(_p20._0)
+							}),
+						_1: _elm_lang$core$Platform_Cmd$none
+					};
+				case 'NavigateTo':
+					var command = _elm_lang$navigation$Navigation$newUrl(
+						A2(_sporto$hop$Hop$makeUrl, _user$project$Main$routerConfig, _p20._0));
+					return {ctor: '_Tuple2', _0: model, _1: command};
+				case 'UrlUpdate':
+					var _p23 = _p20._0;
+					var _p22 = _p20._1;
+					var newModel = _elm_lang$core$Native_Utils.update(
 						model,
-						{rankings: _p28._0.rankings}),
-					_1: _elm_lang$core$Platform_Cmd$none
-				};
-			case 'Failure':
-				var err = A2(_elm_lang$core$Debug$log, 'err', _p28._0);
-				return {
-					ctor: '_Tuple2',
-					_0: _elm_lang$core$Native_Utils.update(
+						{route: _p23, location: _p22});
+					var _p21 = _p23;
+					if (_p21.ctor === 'MainRoute') {
+						var _v15 = _user$project$Main$ShowMain,
+							_v16 = newModel;
+						msg = _v15;
+						model = _v16;
+						continue update;
+					} else {
+						var _v17 = _user$project$Main$ShowDetails(_p21._0),
+							_v18 = _elm_lang$core$Native_Utils.update(
+							model,
+							{route: _p23, location: _p22});
+						msg = _v17;
+						model = _v18;
+						continue update;
+					}
+				case 'ShowMain':
+					var newModel = _elm_lang$core$Native_Utils.update(
 						model,
-						{
-							err: _elm_lang$core$Maybe$Just(err)
-						}),
-					_1: _elm_lang$core$Platform_Cmd$none
-				};
-			case 'SetCurrent':
-				return A2(
-					_user$project$Main$fetchRanking,
-					model,
-					A2(_elm_lang$core$Basics_ops['++'], '/app/rankings/', _p28._0));
-			case 'RankingReceived':
-				return {
-					ctor: '_Tuple2',
-					_0: _elm_lang$core$Native_Utils.update(
+						{current: _elm_lang$core$Maybe$Nothing});
+					return _elm_lang$core$List$isEmpty(model.rankings) ? A2(_user$project$Main$fetchRankingSummary, newModel, '/app/rankings') : {ctor: '_Tuple2', _0: newModel, _1: _elm_lang$core$Platform_Cmd$none};
+				default:
+					return A2(
+						_user$project$Main$fetchRanking,
 						model,
-						{
-							current: _elm_lang$core$Maybe$Just(_p28._0)
-						}),
-					_1: _elm_lang$core$Platform_Cmd$none
-				};
-			case 'BackToRankings':
-				return {
-					ctor: '_Tuple2',
-					_0: _elm_lang$core$Native_Utils.update(
-						model,
-						{current: _elm_lang$core$Maybe$Nothing}),
-					_1: _elm_lang$core$Platform_Cmd$none
-				};
-			default:
-				var command = _elm_lang$navigation$Navigation$newUrl(
-					A2(_sporto$hop$Hop$makeUrl, _user$project$Main$routerConfig, _p28._0));
-				return {ctor: '_Tuple2', _0: model, _1: command};
+						A2(_elm_lang$core$Basics_ops['++'], '/app/rankings/', _p20._0));
+			}
 		}
 	});
+var _user$project$Main$urlUpdate = F2(
+	function (_p24, model) {
+		var _p25 = _p24;
+		var msg = A2(_user$project$Main$UrlUpdate, _p25._0, _p25._1);
+		return A2(_user$project$Main$update, msg, model);
+	});
+var _user$project$Main$init = function (_p26) {
+	var _p27 = _p26;
+	var _p29 = _p27._0;
+	var _p28 = _p27._1;
+	var newModel = {
+		rankings: _elm_lang$core$Native_List.fromArray(
+			[]),
+		current: _elm_lang$core$Maybe$Nothing,
+		err: _elm_lang$core$Maybe$Nothing,
+		route: _p29,
+		location: _p28
+	};
+	return A2(
+		_user$project$Main$urlUpdate,
+		{ctor: '_Tuple2', _0: _p29, _1: _p28},
+		newModel);
+};
 var _user$project$Main$mkUrlFromRoute = function (route) {
-	var _p29 = route;
-	if (_p29.ctor === 'MainRoute') {
+	var _p30 = route;
+	if (_p30.ctor === 'MainRoute') {
 		return A2(
 			_sporto$hop$Hop$matcherToPath,
 			_user$project$Main$mainMatcher,
@@ -14971,11 +14999,11 @@ var _user$project$Main$mkUrlFromRoute = function (route) {
 			_sporto$hop$Hop$matcherToPath,
 			_user$project$Main$detailsMatcher,
 			_elm_lang$core$Native_List.fromArray(
-				[_p29._0]));
+				[_p30._0]));
 	}
 };
-var _user$project$Main$viewRankingLine = function (_p30) {
-	var _p31 = _p30;
+var _user$project$Main$viewRankingLine = function (_p31) {
+	var _p32 = _p31;
 	var url = function (uuid) {
 		return _user$project$Main$mkUrlFromRoute(
 			_user$project$Main$Details(uuid));
@@ -14998,7 +15026,7 @@ var _user$project$Main$viewRankingLine = function (_p30) {
 	var players = A2(
 		_elm_lang$core$List$intersperse,
 		_elm_lang$html$Html$text(', '),
-		A2(_elm_lang$core$List$map, mkRanking, _p31._1._1));
+		A2(_elm_lang$core$List$map, mkRanking, _p32._1._1));
 	return A2(
 		_elm_lang$html$Html$tr,
 		_elm_lang$core$Native_List.fromArray(
@@ -15014,7 +15042,7 @@ var _user$project$Main$viewRankingLine = function (_p30) {
 				_elm_lang$core$Native_List.fromArray(
 					[
 						_elm_lang$html$Html$text(
-						_elm_lang$core$Basics$toString(_p31._0))
+						_elm_lang$core$Basics$toString(_p32._0))
 					])),
 				A2(
 				_elm_lang$html$Html$td,
@@ -15032,7 +15060,7 @@ var _user$project$Main$viewRankingLine = function (_p30) {
 				_elm_lang$core$Native_List.fromArray(
 					[
 						_elm_lang$html$Html$text(
-						_elm_lang$core$Basics$toString(_p31._1._0))
+						_elm_lang$core$Basics$toString(_p32._1._0))
 					]))
 			]));
 };
@@ -15063,9 +15091,9 @@ var _user$project$Main$viewOverview = function (rs) {
 				_user$project$Main$rankingsBreadCrumb,
 				_elm_lang$html$Html$text(' / ')
 			]));
-	var rankingViewByPoints = function (_p32) {
-		var _p33 = _p32;
-		var _p34 = _p33._1._1;
+	var rankingViewByPoints = function (_p33) {
+		var _p34 = _p33;
+		var _p35 = _p34._1._1;
 		var players = A2(
 			_elm_lang$core$String$join,
 			', ',
@@ -15074,7 +15102,7 @@ var _user$project$Main$viewOverview = function (rs) {
 				function (_) {
 					return _.name;
 				},
-				_p34));
+				_p35));
 		var hdr = A2(
 			_elm_lang$html$Html$p,
 			_elm_lang$core$Native_List.fromArray(
@@ -15088,7 +15116,7 @@ var _user$project$Main$viewOverview = function (rs) {
 					_elm_lang$core$Native_List.fromArray(
 						[
 							_elm_lang$html$Html$text(
-							_elm_lang$core$Basics$toString(_p33._0))
+							_elm_lang$core$Basics$toString(_p34._0))
 						])),
 					_elm_lang$html$Html$text(
 					A2(
@@ -15096,11 +15124,11 @@ var _user$project$Main$viewOverview = function (rs) {
 						' (',
 						A2(
 							_elm_lang$core$Basics_ops['++'],
-							_elm_lang$core$Basics$toString(_p33._1._0),
+							_elm_lang$core$Basics$toString(_p34._1._0),
 							A2(_elm_lang$core$Basics_ops['++'], ' ', 'punten): ')))),
 					_elm_lang$html$Html$text(players)
 				]));
-		var no = _elm_lang$core$List$length(_p34);
+		var no = _elm_lang$core$List$length(_p35);
 		var nOfPlayers = _elm_lang$core$Native_Utils.eq(no, 1) ? '' : A2(
 			_elm_lang$core$Basics_ops['++'],
 			' (',
@@ -15126,31 +15154,31 @@ var _user$project$Main$viewOverview = function (rs) {
 	};
 	var toPositions = F2(
 		function (pos, prs) {
-			var _p35 = prs;
-			if (_p35.ctor === '::') {
-				var _p36 = _p35._0._1;
-				var nextPos = pos + _elm_lang$core$List$length(_p36);
+			var _p36 = prs;
+			if (_p36.ctor === '::') {
+				var _p37 = _p36._0._1;
+				var nextPos = pos + _elm_lang$core$List$length(_p37);
 				return A2(
 					_elm_lang$core$List_ops['::'],
 					{
 						ctor: '_Tuple2',
 						_0: pos,
-						_1: {ctor: '_Tuple2', _0: _p35._0._0, _1: _p36}
+						_1: {ctor: '_Tuple2', _0: _p36._0._0, _1: _p37}
 					},
-					A2(toPositions, nextPos, _p35._1));
+					A2(toPositions, nextPos, _p36._1));
 			} else {
 				return _elm_lang$core$Native_List.fromArray(
 					[]);
 			}
 		});
 	var toPointRankingsTuple = function (rs) {
-		var _p37 = _elm_lang$core$List$head(rs);
-		if (_p37.ctor === 'Just') {
+		var _p38 = _elm_lang$core$List$head(rs);
+		if (_p38.ctor === 'Just') {
 			return {
 				ctor: '_Tuple2',
 				_0: function (_) {
 					return _.total;
-				}(_p37._0),
+				}(_p38._0),
 				_1: rs
 			};
 		} else {
@@ -15236,11 +15264,11 @@ var _user$project$Main$viewRanking = function (model) {
 };
 var _user$project$Main$view = function (model) {
 	var vw = function () {
-		var _p38 = model.current;
-		if (_p38.ctor === 'Nothing') {
+		var _p39 = model.current;
+		if (_p39.ctor === 'Nothing') {
 			return _user$project$Main$viewOverview(model.rankings);
 		} else {
-			return _user$project$Main$viewRanking(_p38._0);
+			return _user$project$Main$viewRanking(_p39._0);
 		}
 	}();
 	return A2(
@@ -15259,7 +15287,7 @@ var _user$project$Main$main = {
 			update: _user$project$Main$update,
 			view: _user$project$Main$view,
 			urlUpdate: _user$project$Main$urlUpdate,
-			subscriptions: function (_p39) {
+			subscriptions: function (_p40) {
 				return _elm_lang$core$Platform_Sub$none;
 			}
 		})
