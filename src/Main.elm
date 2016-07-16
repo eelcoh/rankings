@@ -1,6 +1,7 @@
 module Main exposing (..)
 
 import Html exposing (Html, div, span, button, text, textarea, input, section, table, td, tr, th)
+import Html.App
 import Html.Events exposing (onClick)
 import Html.Attributes exposing (id, value, placeholder, class, href)
 
@@ -22,44 +23,25 @@ import Bets.Types.Bracket as B
 import Bets.Bet
 
 import Utils.Types exposing (roundFromString)
+import Utils.List exposing (groupBy)
 
 import Dict
 import String
-import List.Extra exposing (groupWhile)
 
 import Bets.Bet
+
+import Types exposing (..)
+import Stats
 
 {- --------------------------------------------------------
   Types (including model and messages)
 -------------------------------------------------------- -}
 
-type alias UUID = String
-
-type alias RankingSummary =
-  { name : String
-  , pos : Int
-  , rounds : List (Round, Int)
-  , topscorer : Maybe Int
-  , total : Int
-  , uuid : String
-  }
-
-type alias Rankings =
-  { rankings : List RankingSummary }
-
-type alias Ranking =
-  { name : String
-  , pos : Int
-  , rounds : List (Round, Int)
-  , topscorer : Maybe Int
-  , total : Int
-  , uuid : String
-  , bet : Bets.Types.Bet
-  }
 
 type alias Model =
   { rankings : List RankingSummary
-  , current : Maybe Ranking
+  , currentRanking : Maybe Ranking
+  , stats : RoundStats
   , err : Maybe Http.Error
   , location : Location
   , route : Route
@@ -73,6 +55,8 @@ type Msg
   | UrlUpdate Route Hop.Types.Location
   | ShowMain
   | ShowDetails UUID
+  | ShowStats
+  | NoOp
 
 
 {- --------------------------------------------------------
@@ -82,6 +66,7 @@ type Msg
 type Route
   = MainRoute
   | Details String
+  | Stats
 
 
 routerConfig : Config Route
@@ -96,6 +81,7 @@ routerConfig =
 matchers : List (PathMatcher Route)
 matchers =
     [ mainMatcher
+    , statsMatcher
     , detailsMatcher
     ]
 
@@ -104,6 +90,9 @@ mainMatcher : PathMatcher Route
 mainMatcher =
   Matcher.match1 MainRoute ""
 
+statsMatcher : PathMatcher Route
+statsMatcher =
+  Matcher.match1 Stats "/stats"
 
 detailsMatcher : PathMatcher Route
 detailsMatcher =
@@ -134,6 +123,8 @@ mkUrlFromRoute route =
     Details uuid ->
       matcherToPath detailsMatcher [uuid]
 
+    Stats ->
+      matcherToPath statsMatcher []
 
 {- --------------------------------------------------------
   Update
@@ -143,7 +134,11 @@ update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
   case msg of
     Receive rs ->
-      ({model | rankings = rs.rankings}, Cmd.none)
+      let
+        stats =
+          Stats.createStats rs.rankings
+      in
+        ({model | rankings = rs.rankings, stats = stats}, Cmd.none)
 
     Failure httpError ->
       let
@@ -152,7 +147,7 @@ update msg model =
         ({model | err = Just err}, Cmd.none)
 
     RankingReceived r ->
-      ({model | current = Just r}, Cmd.none)
+      ({model | currentRanking = Just r}, Cmd.none)
 
     NavigateTo path ->
       let
@@ -169,17 +164,24 @@ update msg model =
       let
         newModel =
           {model | route = route, location = location }
+
+        newMsg =
+          case route of
+            MainRoute ->
+              ShowMain
+            Details uuid ->
+              ShowDetails uuid
+            Stats ->
+              ShowStats
+
       in
-        case route of
-          MainRoute ->
-            update ShowMain newModel
-          Details uuid ->
-            update (ShowDetails uuid) { model | route = route, location = location }
+        update newMsg newModel
+
 
     ShowMain ->
       let
         newModel =
-          { model | current = Nothing }
+          { model | currentRanking = Nothing }
       in
         if (List.isEmpty model.rankings)
           then
@@ -189,6 +191,16 @@ update msg model =
 
     ShowDetails uuid ->
       fetchRanking model ("/app/rankings/" ++ uuid)
+
+    ShowStats ->
+      if (Dict.isEmpty model.stats)
+        then
+          fetchRankingSummary model "/app/rankings"
+        else
+          (model , Cmd.none)
+
+    NoOp ->
+      (model, Cmd.none)
 
 {- --------------------------------------------------------
   Bootstrapping
@@ -210,7 +222,8 @@ init ( route, location ) =
   let
     newModel =
       { rankings = []
-      , current = Nothing
+      , currentRanking = Nothing
+      , stats = Dict.empty
       , err = Nothing
       , route = route
       , location = location
@@ -226,11 +239,17 @@ view : Model -> Html Msg
 view model =
   let
     vw =
-      case model.current of
-        Nothing ->
+      case model.route of
+        MainRoute ->
           viewOverview model.rankings
-        Just r ->
-          viewRanking r
+        Details _ ->
+          case model.currentRanking of
+            Nothing ->
+              viewOverview model.rankings
+            Just r ->
+              viewRanking r
+        Stats ->
+          Html.App.map (\_ -> NoOp) <| Stats.view (Debug.log "stats" model.stats)
   in
     Html.div []
       [ vw
@@ -730,7 +749,3 @@ viewTeam team =
     , Html.br [] []
     , span [ class "team-name"] [text (T.mdisplay team)]
     ]
-
-groupBy : (a -> comparable) -> List a -> List (List a)
-groupBy toComparable =
-  groupWhile (\left right -> toComparable left == toComparable right)
